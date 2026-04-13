@@ -1,0 +1,52 @@
+# model-routing.toml — Tiered model selection defaults
+#
+# Routes tasks to the appropriate Claude model based on complexity,
+# cost sensitivity, and latency requirements.
+#
+# Tiers:
+#   fast   — Haiku: low-latency, low-cost tasks (triage, status, simple lookups)
+#   medium — Sonnet: balanced tasks (code review, implementation, analysis)
+#   deep   — Opus: complex reasoning (architecture, debugging, multi-file refactors)
+
+[defaults]
+tier = "medium"
+
+[tiers.fast]
+model = "claude-haiku-4-5-20251001"
+description = "Low-latency, low-cost — triage, status checks, simple transforms"
+max_tokens = 4096
+temperature = 0.0
+
+[tiers.medium]
+model = "claude-sonnet-4-6"
+description = "Balanced — code generation, review, standard implementation"
+max_tokens = 8192
+temperature = 0.0
+
+[tiers.deep]
+model = "claude-opus-4-6"
+description = "Complex reasoning — architecture, debugging, multi-step analysis"
+max_tokens = 16384
+temperature = 0.0
+
+# Role-based routing overrides
+# Maps agent roles to their default tier
+
+[routing.roles]
+polecat = "medium"
+witness = "medium"
+refinery = "fast"
+mayor = "deep"
+deacon = "fast"
+
+# Task-based routing overrides
+# Maps task types to their preferred tier
+
+[routing.tasks]
+triage = "fast"
+status_check = "fast"
+code_review = "medium"
+implementation = "medium"
+architecture = "deep"
+debugging = "deep"
+research = "deep"

@@ -1,0 +1,31 @@
+# city.toml — Victory rig identity and topology
+#
+# Defines the rig-level configuration: what this city is, who runs it,
+# and how its agents are organized.
+
+[city]
+name = "victory"
+version = 1
+description = "Victory rig — autonomous CI/CD and code delivery"
+git_url = "git@github.com:RyanMacMillanSoftware/victory"
+default_branch = "main"
+
+[city.beads]
+prefix = "vc"
+database = "beads_victory"
+
+[city.agents]
+witness = "victory/witness"
+refinery = "victory/refinery"
+mayor = "mayor"
+
+[city.polecats]
+# Polecat slots available for dispatch
+slots = ["rust", "go", "node"]
+worktree_root = "polecats"
+
+[city.merge_queue]
+enabled = true
+strategy = "bisecting"       # bisecting | serial | parallel
+batch_size = 4
+gate_timeout = "10m"
