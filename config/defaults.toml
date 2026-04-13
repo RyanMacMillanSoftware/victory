@@ -1,0 +1,41 @@
+# defaults.toml — Victory rig default settings
+#
+# Base configuration inherited by all agents in the rig.
+# Individual agents or formulas can override these values.
+
+[rig]
+name = "victory"
+default_branch = "main"
+beads_prefix = "vc"
+
+[timeouts]
+# How long before an idle agent is considered stuck
+idle_timeout = "15m"
+# Maximum time for a single polecat session
+session_timeout = "2h"
+# How long to wait for Dolt operations
+dolt_timeout = "30s"
+# How long to wait for git operations
+git_timeout = "60s"
+
+[commit]
+# Conventional commit types allowed
+types = ["feat", "fix", "refactor", "test", "docs", "chore"]
+# Require issue reference in commit message
+require_issue_reference = true
+
+[quality_gates]
+# Gates are project-specific; these are the slots.
+# Set actual commands in the project's AGENTS.md or rig settings.
+setup_command = ""
+build_command = ""
+test_command = ""
+lint_command = ""
+typecheck_command = ""
+
+[communication]
+# Default to nudge over mail (cheaper, no Dolt commit)
+prefer_nudge = true
+# Escalation targets
+witness = "victory/witness"
+mayor = "mayor"

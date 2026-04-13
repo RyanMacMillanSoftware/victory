@@ -1,0 +1,62 @@
+# safety-rails.toml — Safety constraints for Victory rig agents
+#
+# Defines hard limits and guardrails that all agents must respect.
+# These are enforced at the rig level and cannot be overridden
+# by individual agents or formulas.
+
+[git]
+# Agents must never push directly to these branches
+protected_branches = ["main", "release/*"]
+# Agents must never force-push
+force_push = false
+# Agents must never skip hooks
+skip_hooks = false
+
+[system]
+# Agents must never run sudo or install system packages
+allow_sudo = false
+# Package managers that agents must never invoke
+forbidden_commands = [
+    "sudo",
+    "apt",
+    "apt-get",
+    "dnf",
+    "yum",
+    "pacman",
+    "brew install",
+    "pip install --system",
+    "npm install -g",
+]
+
+[filesystem]
+# Agents must stay within their worktree
+enforce_worktree_boundary = true
+# Never delete these paths
+protected_paths = [
+    ".git",
+    ".beads",
+    "node_modules",
+]
+# Never commit files matching these patterns
+never_commit = [
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "credentials.*",
+    "secrets.*",
+]
+
+[dolt]
+# Agents must not restart Dolt without diagnostics
+require_diagnostics_before_restart = true
+# Maximum beads an agent can create per session (prevents spam)
+max_beads_per_session = 10
+# Maximum mails an agent can send per session
+max_mails_per_session = 5
+
+[scope]
+# Agents must not expand scope without mayor approval
+require_approval_for_scope_expansion = true
+# Maximum files an agent can modify in a single PR
+max_files_per_pr = 50
