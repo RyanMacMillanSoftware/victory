@@ -20,7 +20,12 @@ schemas = "schemas/"
 scripts = "scripts/"
 
 [pack.defaults]
-config = "config/defaults.toml"
+config        = "config/defaults.toml"
 model_routing = "config/model-routing.toml"
-safety_rails = "config/safety-rails.toml"
+safety_rails  = "config/safety-rails.toml"
 provider_hooks = "config/hooks.json"
+polecat_brief  = "prompts/polecat/brief.md"
+
+[pack.scripts]
+bug_warn_inject = "scripts/bug-warn-inject.sh"
+migrate         = "scripts/migrate.sh"

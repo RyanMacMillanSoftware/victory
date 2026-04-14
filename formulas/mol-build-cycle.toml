@@ -85,13 +85,31 @@ Sling ready beads to available polecats, up to `{{max_parallel}}` in parallel.
 bd ready --label project:{{project}} --limit {{max_parallel}}
 ```
 
-**2. For each ready bead, claim it and dispatch:**
+**2. For each ready bead, claim it and dispatch with bug warnings:**
 ```bash
 # Mark as in_progress (prevents double-dispatch)
 bd update <bead-id> --status=in_progress
 
-# Dispatch to a polecat
-gt sling <bead-id>
+# Extract file paths mentioned in the bead title/description
+# (look for tokens containing '/', '.', or known extensions)
+BEAD_TEXT=$(bd show <bead-id> --short)
+FILE_PATTERNS=$(echo "$BEAD_TEXT" | grep -oE '[a-zA-Z0-9_/-]+\.[a-z]+|[a-zA-Z0-9_/-]+/\*' || true)
+
+# Inject bug memory warnings into the polecat brief
+PACK_DIR="$(git rev-parse --show-toplevel 2>/dev/null || echo .)"
+INJECT_SCRIPT="${PACK_DIR}/scripts/bug-warn-inject.sh"
+
+if [[ -x "${INJECT_SCRIPT}" ]] && [[ -n "${FILE_PATTERNS}" ]]; then
+    # Get warnings for matched file patterns (silence errors if Dolt unavailable)
+    WARNINGS=$(${INJECT_SCRIPT} ${FILE_PATTERNS} 2>/dev/null || true)
+fi
+
+# Dispatch to a polecat — include warnings in the brief if found
+if [[ -n "${WARNINGS:-}" ]]; then
+    echo "${WARNINGS}" | gt sling <bead-id> --stdin
+else
+    gt sling <bead-id>
+fi
 ```
 
 **3. Dispatch all ready beads up to the parallel limit ({{max_parallel}}):**
