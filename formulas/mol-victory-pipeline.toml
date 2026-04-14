@@ -1,0 +1,361 @@
+formula = "mol-victory-pipeline"
+version = 1
+
+description = """
+Full Victory delivery pipeline from problem statement to merged code.
+
+This formula orchestrates the complete Victory pipeline:
+
+```
+[prd-draft]        → Write a draft PRD
+      ↓ (needs: prd-draft)
+[prd-review]       → Review PRD via mol-prd-review convoy
+      ↓ (needs: prd-review)
+[human-clarify]    → Human answers critical questions from review
+      ↓ (needs: human-clarify)
+[spec-draft]       → Write technical spec via mol-spec-draft
+      ↓ (needs: spec-draft)
+[task-decompose]   → Decompose spec into beads via mol-task-decompose
+      ↓ (needs: task-decompose)
+[build-cycle]      → Polecats implement all tasks via mol-build-cycle
+      ↓ (needs: build-cycle)
+[review-gate]      → Gate: verify all work meets spec via mol-review-gate
+      ↓ (needs: review-gate, gate=PASS)
+[deliver]          → Refinery merges; project closed
+```
+
+## Human Gate
+
+One human gate after PRD review. The pipeline blocks at `human-clarify`
+until the human answers clarifying questions from the PRD review.
+
+## Sub-Formulas Used
+
+| Step | Formula |
+|------|---------|
+| prd-draft | mol-prd-draft |
+| prd-review | mol-prd-review (convoy) |
+| spec-draft | mol-spec-draft |
+| task-decompose | mol-task-decompose |
+| build-cycle | mol-build-cycle (per task) |
+| review-gate | mol-review-gate |
+
+## Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| project    | yes | Bead ID for the project/epic |
+| problem    | yes | The problem or feature to build |
+| base_branch | no | Target branch for all merges (default: main) |
+| output_dir | no  | Base directory for docs output (default: docs) |
+"""
+
+[[steps]]
+id = "prd-draft"
+title = "Write draft PRD"
+description = """
+Pour mol-prd-draft to produce a structured PRD for the project.
+
+**Variables to pass:**
+- `project = {{project}}`
+- `output_dir = {{output_dir}}/prd`
+
+**Pour the formula:**
+```bash
+gt pour mol-prd-draft \
+  --var project={{project}} \
+  --var output_dir={{output_dir}}/prd
+```
+
+Work through the mol-prd-draft steps:
+1. Load and understand the problem statement from bead `{{project}}`
+2. Write the PRD to `{{output_dir}}/prd/prd-{{project}}.md`
+3. Self-review
+4. Commit
+
+**Exit criteria:** PRD file committed at `{{output_dir}}/prd/prd-{{project}}.md`.
+"""
+
+[[steps]]
+id = "prd-review"
+title = "Review PRD via parallel convoy"
+needs = ["prd-draft"]
+description = """
+Pour mol-prd-review to run a parallel PRD review convoy.
+
+**Variables to pass:**
+- `problem = {{problem}}`
+- `context = prd_file={{output_dir}}/prd/prd-{{project}}.md`
+
+**Pour the convoy:**
+```bash
+gt pour mol-prd-review \
+  --var problem="{{problem}}" \
+  --var context="PRD file: {{output_dir}}/prd/prd-{{project}}.md"
+```
+
+The review convoy dispatches 6 parallel polecats reviewing:
+- requirements, gaps, ambiguity, feasibility, scope, stakeholders
+
+After synthesis, a consolidated review is written to
+`.prd-reviews/<review-id>/prd-review.md`.
+
+**Wait for synthesis mail:**
+The convoy's synthesis step will mail you with consolidated questions.
+Check:
+```bash
+gt mail inbox
+```
+
+**Persist review path:**
+```bash
+bd update {{project}} --notes "PRD review complete: .prd-reviews/<review-id>/prd-review.md"
+```
+
+**Exit criteria:** PRD review synthesis complete. Questions ready for human gate.
+"""
+
+[[steps]]
+id = "human-clarify"
+title = "Human clarification gate"
+needs = ["prd-review"]
+description = """
+Present PRD review questions to the human and collect answers.
+
+**This is the single human gate in the pipeline.**
+
+**1. Read the PRD review:**
+```bash
+cat .prd-reviews/<review-id>/prd-review.md
+```
+
+**2. Present critical questions to the human:**
+```bash
+gt mail send --human \
+  -s "PRD Review complete: {{project}} — answers needed" \
+  -m "PRD review is ready. Please answer the critical questions so I can
+proceed with spec writing.
+
+$(cat .prd-reviews/<review-id>/prd-review.md | grep -A 50 '## Before You Build')"
+```
+
+**3. Wait for human response:**
+```bash
+gt mail inbox --watch   # Wait for reply
+```
+
+**4. When answers arrive:**
+- Update the PRD with the answers
+- Commit the updated PRD:
+```bash
+git add {{output_dir}}/prd/prd-{{project}}.md
+git commit -m "docs: update PRD with human clarifications ({{project}})"
+```
+
+**Persist answers to bead:**
+```bash
+bd update {{project}} --notes "Human clarifications received and applied to PRD."
+```
+
+**Exit criteria:** Human has answered all critical questions. PRD updated with answers.
+"""
+
+[[steps]]
+id = "spec-draft"
+title = "Write technical specification"
+needs = ["human-clarify"]
+description = """
+Pour mol-spec-draft to produce a technical spec from the updated PRD.
+
+**Variables to pass:**
+- `project = {{project}}`
+- `prd_file = {{output_dir}}/prd/prd-{{project}}.md`
+- `output_dir = {{output_dir}}/specs`
+
+**Pour the formula:**
+```bash
+gt pour mol-spec-draft \
+  --var project={{project}} \
+  --var prd_file={{output_dir}}/prd/prd-{{project}}.md \
+  --var output_dir={{output_dir}}/specs
+```
+
+Work through mol-spec-draft steps:
+1. Load and understand the PRD
+2. Write spec to `{{output_dir}}/specs/spec-{{project}}.md`
+3. Self-review (every component has acceptance criteria)
+4. Commit
+
+**Exit criteria:** Spec file committed at `{{output_dir}}/specs/spec-{{project}}.md`.
+All components defined with testable acceptance criteria.
+"""
+
+[[steps]]
+id = "task-decompose"
+title = "Decompose spec into task beads"
+needs = ["spec-draft"]
+description = """
+Pour mol-task-decompose to create task beads from the spec.
+
+**Variables to pass:**
+- `project = {{project}}`
+- `spec_file = {{output_dir}}/specs/spec-{{project}}.md`
+
+**Pour the formula:**
+```bash
+gt pour mol-task-decompose \
+  --var project={{project}} \
+  --var spec_file={{output_dir}}/specs/spec-{{project}}.md
+```
+
+Work through mol-task-decompose steps:
+1. Load and analyze the spec
+2. Create one bead per spec component with `bd create`
+3. Wire dependencies between beads
+4. Create a convoy grouping all task beads
+5. Verify every spec component has a bead
+
+**Note the convoy ID** — you'll need it for the review-gate step.
+
+**Persist convoy ID:**
+```bash
+bd update {{project}} --notes "Convoy created: <convoy-id>
+Task count: <count>"
+```
+
+**Exit criteria:** All spec components have beads. Convoy created. Dependencies wired.
+"""
+
+[[steps]]
+id = "build-cycle"
+title = "Dispatch polecats for all tasks"
+needs = ["task-decompose"]
+description = """
+Dispatch polecats to implement all task beads in the convoy.
+
+**1. Get the convoy and its tasks:**
+```bash
+bd convoy show <convoy-id>
+```
+
+**2. Dispatch ready tasks (no unmet dependencies) to polecats:**
+```bash
+# For each ready task, sling a polecat with mol-build-cycle:
+gt sling --formula mol-build-cycle \
+  --var issue=<task-bead-id> \
+  --var base_branch={{base_branch}}
+```
+
+**3. Monitor progress:**
+```bash
+bd convoy show <convoy-id>   # Watch task status
+gt mail inbox                 # Check for HELP messages from polecats
+```
+
+**4. As tasks complete, dispatch dependent tasks that are now unblocked:**
+```bash
+bd convoy show <convoy-id>   # Shows which tasks are now unblocked
+```
+
+**5. When a polecat needs help:**
+```bash
+gt mail inbox   # Read HELP messages
+# Unblock them by answering questions or adjusting the spec
+```
+
+**Exit criteria:** All task beads in convoy are closed (merged or explicitly deferred).
+"""
+
+[[steps]]
+id = "review-gate"
+title = "Run review gate"
+needs = ["build-cycle"]
+description = """
+Pour mol-review-gate to verify all work meets the spec before delivery.
+
+**Variables to pass:**
+- `project = {{project}}`
+- `spec_file = {{output_dir}}/specs/spec-{{project}}.md`
+- `convoy_id = <convoy-id>`
+- `base_branch = {{base_branch}}`
+
+**Pour the formula:**
+```bash
+gt pour mol-review-gate \
+  --var project={{project}} \
+  --var spec_file={{output_dir}}/specs/spec-{{project}}.md \
+  --var convoy_id=<convoy-id> \
+  --var base_branch={{base_branch}}
+```
+
+Work through mol-review-gate steps:
+1. Collect completed work from convoy
+2. Check each acceptance criterion from the spec
+3. Run quality gates (build, test, lint)
+4. Make PASS/FAIL decision
+
+**On FAIL:** Fix beads are created and dispatched. Re-run build-cycle for them,
+then re-run review-gate.
+
+**On PASS:** Proceed to deliver step.
+
+**Exit criteria:** Review gate returns PASS. All acceptance criteria met.
+"""
+
+[[steps]]
+id = "deliver"
+title = "Deliver: close project and notify"
+needs = ["review-gate"]
+description = """
+Close the project and notify stakeholders.
+
+**1. Verify the review gate passed:**
+```bash
+bd show {{project}}
+# Notes should contain "Review gate: PASS"
+```
+
+**2. Submit all convoy branches to merge queue:**
+```bash
+gt done --pre-verified --target {{base_branch}}
+```
+
+The Refinery merges all passing MRs from the convoy.
+
+**3. Close the project epic:**
+```bash
+bd close {{project}} --reason "Pipeline complete: all tasks delivered and merged."
+```
+
+**4. Notify the human overseer:**
+```bash
+gt mail send --human \
+  -s "Delivered: {{project}}" \
+  -m "Victory pipeline complete for {{project}}.
+
+All tasks implemented, review gate passed, and work submitted to merge queue.
+The Refinery will merge to {{base_branch}} after running the final gate suite.
+
+Spec: {{output_dir}}/specs/spec-{{project}}.md
+PRD:  {{output_dir}}/prd/prd-{{project}}.md"
+```
+
+**Exit criteria:** Project bead closed. Human notified. Work in merge queue.
+"""
+
+[vars]
+[vars.project]
+description = "Bead ID for the project/epic driving this pipeline"
+required = true
+
+[vars.problem]
+description = "The problem or feature to build (natural language description)"
+required = true
+
+[vars.base_branch]
+description = "Target branch for all merges"
+default = "main"
+
+[vars.output_dir]
+description = "Base directory for docs output (PRD and spec files)"
+default = "docs"

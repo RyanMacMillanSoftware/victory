@@ -1,0 +1,295 @@
+formula = "mol-build-cycle"
+version = 1
+
+description = """
+Implementation build cycle for a single task bead.
+
+This is the core "do the work" formula used by polecats working a task
+within a Victory pipeline convoy. It handles the full loop from loading
+context through implementation to committing and submitting.
+
+Designed for tasks produced by mol-task-decompose — each task bead
+contains acceptance criteria that define done.
+
+## Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| issue       | yes | The task bead ID to implement |
+| base_branch | no  | Branch to rebase on (default: main) |
+| build_command    | no | Build command. Empty = skip. |
+| test_command     | no | Test command. Empty = skip. |
+| lint_command     | no | Lint command. Empty = skip. |
+| typecheck_command | no | Type check command. Empty = skip. |
+"""
+
+[[steps]]
+id = "load-context"
+title = "Load context and understand the task"
+description = """
+Initialize your session and understand what needs to be built.
+
+**1. Prime your environment:**
+```bash
+gt prime
+bd prime
+```
+
+**2. Load your task:**
+```bash
+gt hook
+bd show {{issue}}
+```
+
+Read the task description and acceptance criteria carefully.
+Note the parent project and spec file path — you may need to read the spec.
+
+**3. Read the spec (if referenced):**
+If the task references a spec file:
+```bash
+cat <spec_file>
+```
+
+Focus on the component(s) this task implements.
+
+**4. Check mail for context:**
+```bash
+gt mail inbox
+```
+
+**5. Check for prior merge failure context:**
+If the bead notes contain "MERGE REJECTION", read what failed carefully.
+Check for a prior branch:
+```bash
+git fetch origin
+git branch -r | grep polecat/
+```
+
+**Exit criteria:** You understand exactly what to build and what done looks like.
+"""
+
+[[steps]]
+id = "branch-setup"
+title = "Set up working branch"
+needs = ["load-context"]
+description = """
+Ensure you're on a clean feature branch.
+
+**1. Check current state:**
+```bash
+git status
+git branch --show-current
+```
+
+**2. If no prior branch, create one:**
+```bash
+git fetch origin
+git checkout -b polecat/nitro-{{issue}} origin/{{base_branch}}
+```
+
+**3. Ensure clean working state:**
+```bash
+git status   # Should be clean
+```
+
+**4. Run setup if configured:**
+```bash
+{{build_command}}
+```
+
+**Exit criteria:** Clean feature branch, rebased on {{base_branch}}.
+"""
+
+[[steps]]
+id = "implement"
+title = "Implement the task"
+needs = ["branch-setup"]
+description = """
+Build the component(s) defined by this task.
+
+**Working principles:**
+- Follow existing codebase conventions
+- Implement to acceptance criteria (not beyond)
+- Make atomic commits per logical unit
+
+**Check acceptance criteria as you go:**
+```bash
+bd show {{issue}}
+# Each acceptance criterion should be verifiable
+```
+
+**Commit frequently:**
+```bash
+git add <files>
+git commit -m "<type>: <description> ({{issue}})"
+```
+
+**Persist findings if you discover important context:**
+```bash
+bd update {{issue}} --notes "Implementation notes: <key decisions>"
+```
+
+**If blocked:**
+```bash
+gt mail send victory/witness -s "HELP: Blocked on {{issue}}" -m "
+Issue: {{issue}}
+Blocked on: <what>
+Tried: <attempts>"
+```
+
+**Exit criteria:** All acceptance criteria implemented. Code committed.
+"""
+
+[[steps]]
+id = "run-tests"
+title = "Run tests and quality gates"
+needs = ["implement"]
+description = """
+Verify your implementation passes quality gates.
+
+**1. Build:**
+```bash
+{{build_command}}
+```
+
+**2. Type check:**
+```bash
+{{typecheck_command}}
+```
+
+**3. Targeted tests:**
+```bash
+{{test_command}}
+```
+
+**4. Lint:**
+```bash
+{{lint_command}}
+```
+
+Empty commands mean "not configured" — skip silently.
+
+**If any gate fails:**
+- Fix the issue
+- Return to implement step if needed
+- Do NOT submit failing code
+
+**Verify acceptance criteria are met:**
+Read each acceptance criterion in `bd show {{issue}}` and confirm it passes.
+
+**Exit criteria:** All gates pass. All acceptance criteria met.
+"""
+
+[[steps]]
+id = "self-review"
+title = "Self-review changes"
+needs = ["run-tests"]
+description = """
+Review changes before submitting.
+
+**1. Review the diff:**
+```bash
+git diff origin/{{base_branch}}...HEAD
+git log --oneline origin/{{base_branch}}..HEAD
+```
+
+**2. Check for common issues:**
+
+| Category | Look For |
+|----------|----------|
+| Correctness | Does it actually meet all acceptance criteria? |
+| Security | Injection, auth bypass, exposed secrets |
+| Completeness | Missing error paths, edge cases |
+| Cruft | Debug prints, commented code, TODOs |
+
+**3. Fix any issues found.**
+
+**4. Verify only task-relevant files are changed:**
+```bash
+git diff --stat origin/{{base_branch}}...HEAD
+```
+
+**Exit criteria:** Changes clean. No unintended modifications.
+"""
+
+[[steps]]
+id = "pre-verify"
+title = "Pre-merge rebase and verification"
+needs = ["self-review"]
+description = """
+Rebase onto the target branch and run the full gate suite.
+
+**1. Rebase:**
+```bash
+git fetch origin {{base_branch}}
+git rebase origin/{{base_branch}}
+```
+
+**2. Run full gate suite:**
+```bash
+{{build_command}}
+{{typecheck_command}}
+{{lint_command}}
+{{test_command}}
+```
+
+Empty commands = skip silently.
+
+**3. If gates fail:**
+Fix, commit, restart from step 1.
+
+**4. If gates pass:**
+Use `gt done --pre-verified` in the next step.
+
+**Exit criteria:** Rebased on latest {{base_branch}}, all gates pass.
+"""
+
+[[steps]]
+id = "submit"
+title = "Submit work and self-clean"
+needs = ["pre-verify"]
+description = """
+Submit and exit.
+
+**Pre-flight check:**
+```bash
+git log origin/{{base_branch}}..HEAD --oneline
+# Must show at least 1 commit
+```
+
+**Submit:**
+```bash
+# With pre-verification (fast-path merge):
+gt done --pre-verified --target {{base_branch}}
+
+# Without pre-verification:
+gt done --target {{base_branch}}
+```
+
+**Exit criteria:** Work submitted, sandbox nuked, session exited.
+"""
+
+[vars]
+[vars.issue]
+description = "The task bead ID to implement"
+required = true
+
+[vars.base_branch]
+description = "The base branch to rebase on"
+default = "main"
+
+[vars.build_command]
+description = "Build command. Empty = skip."
+default = ""
+
+[vars.test_command]
+description = "Test command. Empty = skip."
+default = ""
+
+[vars.lint_command]
+description = "Lint command. Empty = skip."
+default = ""
+
+[vars.typecheck_command]
+description = "Type check command. Empty = skip."
+default = ""

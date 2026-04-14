@@ -1,0 +1,236 @@
+formula = "mol-onboard-repo"
+version = 1
+
+description = """
+Onboard a repository to the Victory rig.
+
+A polecat runs this formula to set up a new repository for Victory-managed
+CI/CD delivery. After onboarding, polecats can be dispatched to work in
+the repo and the refinery can merge and run gates on it.
+
+## What onboarding does
+1. Inspects the repo to understand its stack and quality gates
+2. Configures quality gate commands (build, test, lint)
+3. Writes AGENTS.md with rig-level context for future polecats
+4. Registers the repo in the city's known repos list
+5. Creates a smoke test bead to verify the setup works
+
+## Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| repo_path  | yes | Absolute path to the repository root |
+| repo_name  | yes | Short name for the repo (used in city.toml and beads) |
+| repo_url   | no  | Git remote URL (auto-detected if empty) |
+| priority   | no  | Default priority for beads in this repo (default: 2) |
+"""
+
+[[steps]]
+id = "inspect-repo"
+title = "Inspect the repository"
+description = """
+Understand the repo's stack, structure, and existing quality gates.
+
+**1. Navigate to the repo:**
+```bash
+cd {{repo_path}}
+ls
+```
+
+**2. Detect the stack:**
+
+Look for these indicators:
+
+| File | Stack |
+|------|-------|
+| go.mod | Go |
+| package.json | Node/JS/TS |
+| Cargo.toml | Rust |
+| pyproject.toml / setup.py | Python |
+| pom.xml / build.gradle | Java/JVM |
+| *.csproj | .NET |
+
+**3. Find existing CI configuration:**
+```bash
+ls .github/workflows/ 2>/dev/null
+ls Makefile 2>/dev/null
+cat Makefile 2>/dev/null | grep -E "^(build|test|lint|check):"
+```
+
+**4. Check for existing AGENTS.md:**
+```bash
+cat AGENTS.md 2>/dev/null
+```
+
+**5. Detect git remote:**
+```bash
+git remote get-url origin
+```
+
+**6. Check for existing test/build commands:**
+Look at package.json scripts, Makefile targets, or CI workflow steps.
+
+**Persist findings:**
+```bash
+bd update <onboard-bead> --notes "Repo inspection:
+Stack: <detected stack>
+Build: <build command>
+Test: <test command>
+Lint: <lint command>
+Remote: <git url>"
+```
+
+**Exit criteria:** Stack identified. Build/test/lint commands found or noted as absent.
+"""
+
+[[steps]]
+id = "configure-gates"
+title = "Configure quality gates"
+needs = ["inspect-repo"]
+description = """
+Set up the quality gate commands for this repo in its config.
+
+**Write or update the rig settings for this repo.**
+
+If the repo already has a config file (e.g., `.victory.toml` or `AGENTS.md`):
+```bash
+cat .victory.toml 2>/dev/null || cat AGENTS.md 2>/dev/null
+```
+
+**Create or update `.victory.toml` in the repo root:**
+```toml
+# .victory.toml — Victory rig configuration for <repo_name>
+
+[gates]
+build_command = "<detected build command or empty>"
+test_command  = "<detected test command or empty>"
+lint_command  = "<detected lint command or empty>"
+typecheck_command = "<detected typecheck command or empty>"
+setup_command = "<install deps command or empty>"
+
+[repo]
+name = "{{repo_name}}"
+default_branch = "main"
+```
+
+**Verify the gates work:**
+```bash
+# Run each non-empty gate command to verify it succeeds on the current codebase
+```
+
+If a gate fails on the current codebase (pre-existing failure), note it:
+```bash
+bd update <onboard-bead> --notes "Pre-existing gate failure: <gate> fails with <error>
+This is a known issue — polecats should not be blamed for this."
+```
+
+**Exit criteria:** `.victory.toml` written with correct gate commands. Gates verified.
+"""
+
+[[steps]]
+id = "write-agents-md"
+title = "Write AGENTS.md"
+needs = ["inspect-repo"]
+description = """
+Write an AGENTS.md file to give polecats rig-level context.
+
+**Read the template if available:**
+```bash
+cat ~/gt/victory/templates/AGENTS.md 2>/dev/null
+```
+
+**Write AGENTS.md to the repo root:**
+
+```markdown
+# {{repo_name}} — Agent Context
+
+## Stack
+<language and framework>
+
+## Core Rule
+Before submitting: `<build_command> && <test_command>`. Both must pass.
+
+## Quality Gates
+| Gate | Command |
+|------|---------|
+| Build | `<build_command>` |
+| Test  | `<test_command>` |
+| Lint  | `<lint_command>` |
+
+## Repository Layout
+<key directories and what they contain>
+
+## Conventions
+- <commit conventions>
+- <naming conventions>
+- <other important patterns>
+
+## Known Gotchas
+- <anything that trips up new contributors>
+```
+
+Fill in from your repo inspection findings.
+
+**Exit criteria:** AGENTS.md exists at repo root with accurate content.
+"""
+
+[[steps]]
+id = "register-repo"
+title = "Register repo in city configuration"
+needs = ["configure-gates", "write-agents-md"]
+description = """
+Register the repo with the Victory rig so polecats can be dispatched to it.
+
+**1. Add repo entry to victory city config:**
+
+Update `city.toml` or the city's repo registry:
+```bash
+# In the victory rig root, check for a repos config:
+cat ~/gt/victory/config/repos.toml 2>/dev/null
+```
+
+Add an entry:
+```toml
+[[repos]]
+name = "{{repo_name}}"
+path = "{{repo_path}}"
+url = "{{repo_url}}"
+default_branch = "main"
+```
+
+**2. Create a smoke test bead:**
+```bash
+bd create \
+  --title "Smoke test: verify {{repo_name}} Victory setup works" \
+  --type task \
+  --priority 3 \
+  --notes "Auto-created during onboarding. Dispatch a polecat to verify AGENTS.md, gates, and a trivial commit work end-to-end."
+```
+
+**3. Persist completion summary:**
+```bash
+bd update <onboard-bead> --notes "Onboarding complete for {{repo_name}}.
+Config: {{repo_path}}/.victory.toml
+AGENTS.md: {{repo_path}}/AGENTS.md
+Smoke test bead: <id>"
+```
+
+**Exit criteria:** Repo registered. Smoke test bead created.
+"""
+
+[vars]
+[vars.repo_path]
+description = "Absolute path to the repository root"
+required = true
+
+[vars.repo_name]
+description = "Short name for the repo (used in city.toml and beads)"
+required = true
+
+[vars.repo_url]
+description = "Git remote URL (auto-detected if empty)"
+default = ""
+
+[vars.priority]
+description = "Default priority for beads in this repo"
+default = "2"

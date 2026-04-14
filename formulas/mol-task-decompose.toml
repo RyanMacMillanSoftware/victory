@@ -1,0 +1,163 @@
+formula = "mol-task-decompose"
+version = 1
+
+description = """
+Decompose a technical spec into beads with dependency relationships.
+
+A polecat reads the spec, identifies discrete implementable tasks, creates
+beads for each, and wires up the dependency graph. The result is a convoy
+ready for dispatch to polecats.
+
+## Output
+- One bead per component/task in the spec
+- Dependency edges between beads (needs/blocks)
+- A convoy grouping all tasks under the project epic
+
+## Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| project  | yes      | Bead ID of the project/epic |
+| spec_file | yes     | Path to the spec file to decompose |
+| convoy_id | no      | Existing convoy ID to add tasks to (creates new if empty) |
+"""
+
+[[steps]]
+id = "load-spec"
+title = "Load and analyze the spec"
+description = """
+Read the spec and plan the task breakdown.
+
+**1. Load your assignment:**
+```bash
+bd show {{project}}
+```
+
+**2. Read the spec:**
+```bash
+cat {{spec_file}}
+```
+
+For each component in the spec, identify:
+- What needs to be built (the task)
+- What it depends on (ordering constraints)
+- What acceptance criteria define done
+- Rough size (1 = small, 2 = medium, 3 = large)
+
+**3. Check for existing beads to avoid duplicates:**
+```bash
+bd show {{project}} --children
+```
+
+**Exit criteria:** You have a clear list of tasks to create with their dependencies.
+"""
+
+[[steps]]
+id = "create-beads"
+title = "Create task beads with dependencies"
+needs = ["load-spec"]
+description = """
+Create one bead per task. Wire up the dependency graph.
+
+**For each task identified in the spec:**
+```bash
+bd create --title "<task title>" \
+  --type task \
+  --priority 2 \
+  --parent {{project}}
+# Note the generated ID (e.g., vc-abc)
+```
+
+**After creating all tasks, wire dependencies:**
+```bash
+# Task B depends on Task A:
+bd update <task-b-id> --needs <task-a-id>
+```
+
+**Naming convention:**
+- Use imperative form: "Implement X", "Add Y", "Write tests for Z"
+- Reference the spec component: title should match the component name
+
+**Track IDs as you go** — you'll need them for dependency wiring:
+```
+component: user-auth → bead: vc-xyz
+component: session-store → bead: vc-abc (needs vc-xyz)
+```
+
+**Exit criteria:** All spec components have a bead. Dependencies are wired.
+"""
+
+[[steps]]
+id = "create-convoy"
+title = "Create or update convoy"
+needs = ["create-beads"]
+description = """
+Group all tasks into a convoy for coordinated dispatch.
+
+**If no convoy exists yet ({{convoy_id}} is empty):**
+```bash
+bd convoy create --title "{{project}} implementation" \
+  --parent {{project}}
+# Note the convoy ID
+```
+
+**Add all created task beads to the convoy:**
+```bash
+bd convoy add <convoy-id> <task-bead-id-1> <task-bead-id-2> ...
+```
+
+**Verify convoy:**
+```bash
+bd convoy show <convoy-id>
+# Should list all tasks with their dependency ordering
+```
+
+**Exit criteria:** Convoy exists with all task beads correctly grouped.
+"""
+
+[[steps]]
+id = "verify-coverage"
+title = "Verify spec coverage"
+needs = ["create-convoy"]
+description = """
+Confirm every spec component has a corresponding bead.
+
+**Cross-check spec vs beads:**
+
+1. List spec components (from {{spec_file}})
+2. List all beads created for {{project}}:
+```bash
+bd show {{project}} --children
+```
+
+3. For each spec component, verify a bead exists.
+
+**If any spec component lacks a bead:**
+```bash
+bd create --title "<missed component>" --type task --priority 2 --parent {{project}}
+bd convoy add <convoy-id> <new-bead-id>
+```
+
+**Persist summary to project bead:**
+```bash
+bd update {{project}} --notes "Task decomposition complete.
+Convoy: <convoy-id>
+Tasks created: <count>
+Spec file: {{spec_file}}"
+```
+
+**Exit criteria:** Every spec component maps to a bead. Summary persisted.
+"""
+
+[vars]
+[vars.project]
+description = "Bead ID of the project/epic"
+required = true
+
+[vars.spec_file]
+description = "Path to the spec file to decompose"
+required = true
+
+[vars.convoy_id]
+description = "Existing convoy ID to add tasks to (creates new if empty)"
+default = ""

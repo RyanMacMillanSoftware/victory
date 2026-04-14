@@ -1,0 +1,197 @@
+formula = "mol-review-gate"
+version = 1
+
+description = """
+Review gate: verify a convoy's completed work against the spec before merging.
+
+A polecat runs this formula after all build tasks in a convoy are complete.
+It checks that the combined work meets the spec's acceptance criteria and
+either passes the convoy to merge or flags issues for remediation.
+
+## Gate decision
+
+- **PASS**: All acceptance criteria met, no blocking issues → work proceeds to merge
+- **FAIL**: Blocking issues found → affected tasks get new fix beads dispatched
+
+## Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| project   | yes      | Project/epic bead ID |
+| spec_file | yes      | Path to the technical spec |
+| convoy_id | yes      | The convoy to review |
+| base_branch | no     | Branch to diff against (default: main) |
+"""
+
+[[steps]]
+id = "collect-work"
+title = "Collect completed work for review"
+description = """
+Gather all completed work in the convoy.
+
+**1. Load the project and convoy:**
+```bash
+bd show {{project}}
+bd convoy show {{convoy_id}}
+```
+
+**2. Verify all tasks are complete:**
+```bash
+bd convoy show {{convoy_id}}
+# All task beads should be closed/merged, not open or in_progress
+```
+
+If tasks are still open or in progress, this step blocks:
+```bash
+# Do NOT proceed with open tasks — they must complete first
+gt mail send victory/witness -s "Review gate blocked: open tasks" -m "
+Convoy {{convoy_id}} has open tasks. Review gate cannot proceed.
+Open tasks: <list>"
+```
+
+**3. Check git log for all commits in this convoy:**
+```bash
+git log origin/{{base_branch}}..HEAD --oneline
+```
+
+**Exit criteria:** All convoy tasks are closed. Work exists to review.
+"""
+
+[[steps]]
+id = "spec-alignment"
+title = "Check work against spec acceptance criteria"
+needs = ["collect-work"]
+description = """
+Verify the implemented work meets all acceptance criteria from the spec.
+
+**1. Read the spec:**
+```bash
+cat {{spec_file}}
+```
+
+**2. For each component and its acceptance criteria:**
+
+Check the actual code/artifacts against each criterion:
+```bash
+git diff origin/{{base_branch}}...HEAD
+```
+
+Record findings:
+
+| Component | Criterion | Status | Notes |
+|-----------|-----------|--------|-------|
+| <name>    | <criterion> | PASS/FAIL | <details> |
+
+**3. Check for out-of-scope changes:**
+```bash
+git diff --stat origin/{{base_branch}}...HEAD
+# Flag files that shouldn't have changed
+```
+
+**Exit criteria:** Every acceptance criterion evaluated. Findings recorded.
+"""
+
+[[steps]]
+id = "quality-check"
+title = "Run quality gate verification"
+needs = ["collect-work"]
+description = """
+Run the full gate suite on the completed work.
+
+**Pull the latest merged state:**
+```bash
+git fetch origin {{base_branch}}
+git log origin/{{base_branch}}..HEAD --oneline
+```
+
+**Run all gates:**
+
+Build:
+```bash
+# Run project build command (from rig config or AGENTS.md)
+```
+
+Tests:
+```bash
+# Run project test command
+```
+
+Lint:
+```bash
+# Run project lint command
+```
+
+**Record gate results:**
+- Which passed?
+- Which failed, and with what errors?
+
+**Exit criteria:** Gate results recorded. Pass or fail noted per gate.
+"""
+
+[[steps]]
+id = "gate-decision"
+title = "Make gate pass/fail decision"
+needs = ["spec-alignment", "quality-check"]
+description = """
+Synthesize findings into a PASS or FAIL decision.
+
+**PASS criteria (ALL must be true):**
+- [ ] All spec acceptance criteria met
+- [ ] No out-of-scope changes
+- [ ] All quality gates pass
+- [ ] No security regressions
+
+**On PASS:**
+```bash
+bd update {{project}} --notes "Review gate: PASS
+Convoy: {{convoy_id}}
+All acceptance criteria met. Quality gates green. Ready to merge."
+
+# Notify witness
+gt nudge victory/witness "Review gate PASS for {{project}} convoy {{convoy_id}}"
+```
+
+**On FAIL:**
+For each failing criterion, create a fix bead:
+```bash
+bd create --title "Fix: <criterion that failed>" \
+  --type bug \
+  --priority 1 \
+  --parent {{project}}
+# Add to convoy
+bd convoy add {{convoy_id}} <new-fix-bead-id>
+```
+
+Persist fail summary:
+```bash
+bd update {{project}} --notes "Review gate: FAIL
+Convoy: {{convoy_id}}
+Failing criteria: <list>
+Fix beads created: <list of bead IDs>"
+
+gt mail send victory/witness -s "Review gate FAIL: {{project}}" -m "
+Convoy {{convoy_id}} failed review gate.
+Failing items: <list>
+Fix beads: <list>
+Action needed: dispatch fix beads"
+```
+
+**Exit criteria:** Decision made. PASS logged or FAIL fix beads created and witness notified.
+"""
+
+[vars]
+[vars.project]
+description = "Project/epic bead ID"
+required = true
+
+[vars.spec_file]
+description = "Path to the technical spec to review against"
+required = true
+
+[vars.convoy_id]
+description = "The convoy whose work is being reviewed"
+required = true
+
+[vars.base_branch]
+description = "Branch to diff against"
+default = "main"

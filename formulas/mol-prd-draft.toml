@@ -1,0 +1,150 @@
+formula = "mol-prd-draft"
+version = 1
+
+description = """
+Write a draft PRD (Product Requirements Document) from a problem statement.
+
+A polecat works through this formula to produce a structured PRD file that
+can flow into mol-spec-draft or the full mol-victory-pipeline.
+
+## Output
+A PRD markdown file written to the project's docs or .prd directory.
+
+## Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| project   | yes      | Bead ID of the project/epic to write the PRD for |
+| output_dir | no      | Directory to write the PRD file (default: docs/prd) |
+"""
+
+[[steps]]
+id = "load-problem"
+title = "Load problem statement and gather context"
+description = """
+Understand the problem before writing anything.
+
+**1. Load your assignment:**
+```bash
+bd show {{project}}
+```
+
+Read the description carefully. Note:
+- What problem is being solved?
+- Who is affected?
+- Any existing constraints or context?
+
+**2. Check for related beads and prior art:**
+```bash
+bd show {{project}} --refs   # Beads referencing this project
+```
+
+Look for prior PRDs, specs, or research attached to related beads.
+
+**3. Check mail for additional context:**
+```bash
+gt mail inbox
+```
+
+**Exit criteria:** You understand the problem well enough to write a PRD.
+"""
+
+[[steps]]
+id = "write-prd"
+title = "Write the PRD"
+needs = ["load-problem"]
+description = """
+Write a structured PRD for the project.
+
+**Output file:** `{{output_dir}}/prd-{{project}}.md`
+
+Use this structure:
+
+```markdown
+# PRD: <feature/project name>
+
+## Problem Statement
+(What problem are we solving? For whom? Why now?)
+
+## Goals
+(What success looks like — specific and measurable where possible)
+
+## Non-Goals
+(Explicitly out of scope — prevents scope creep)
+
+## User Stories / Scenarios
+(How will this be used? Concrete scenarios with actors)
+
+## Constraints
+(Technical, business, timeline, or resource constraints)
+
+## Open Questions
+(Known unknowns — the spec review will find more)
+
+## Rough Approach
+(Initial direction — not a plan, just enough to inform spec writing)
+```
+
+Write to the output file:
+```bash
+mkdir -p {{output_dir}}
+# Write your PRD to {{output_dir}}/prd-{{project}}.md
+```
+
+**Exit criteria:** PRD file exists with all sections filled in.
+"""
+
+[[steps]]
+id = "self-review"
+title = "Self-review the PRD"
+needs = ["write-prd"]
+description = """
+Review your PRD before committing.
+
+**Read through and check:**
+
+| Check | Question |
+|-------|----------|
+| Problem | Is the problem clearly stated with measurable outcomes? |
+| Goals | Are goals specific enough to test against? |
+| Non-goals | Have you explicitly excluded scope-creep magnets? |
+| Scenarios | Do the user stories cover the main paths? |
+| Constraints | Have you captured known technical and business constraints? |
+| Questions | Are known unknowns listed so reviewers know what to focus on? |
+
+Fix any gaps found. The PRD doesn't need to be perfect, but it should be
+complete enough for a spec writer to start.
+
+**Exit criteria:** PRD passes your own review. All sections are substantive.
+"""
+
+[[steps]]
+id = "commit-and-persist"
+title = "Commit PRD and persist findings"
+needs = ["self-review"]
+description = """
+Commit the PRD file and persist a summary to the bead.
+
+**1. Stage and commit:**
+```bash
+git add {{output_dir}}/prd-{{project}}.md
+git commit -m "docs: write PRD for {{project}} ({{project}})"
+```
+
+**2. Persist summary to bead:**
+```bash
+bd update {{project}} --notes "PRD written: {{output_dir}}/prd-{{project}}.md
+Summary: <1-2 sentence summary of the PRD scope>"
+```
+
+**Exit criteria:** PRD committed to git. Summary persisted to bead.
+"""
+
+[vars]
+[vars.project]
+description = "Bead ID of the project/epic to write the PRD for"
+required = true
+
+[vars.output_dir]
+description = "Directory to write the PRD file"
+default = "docs/prd"

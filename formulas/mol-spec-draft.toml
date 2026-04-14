@@ -1,0 +1,172 @@
+formula = "mol-spec-draft"
+version = 1
+
+description = """
+Write a technical specification from a PRD.
+
+A polecat reads the PRD and produces a spec that is detailed enough for
+task decomposition and implementation by other polecats.
+
+## What a good spec contains
+- Architecture decisions with rationale
+- Data model changes
+- API contracts (endpoints, schemas, events)
+- Component breakdown (what needs to be built)
+- Acceptance criteria for each component
+- Out-of-scope items (prevents scope creep during build)
+
+## Output
+A spec markdown file written to docs/specs/.
+
+## Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| project  | yes      | Bead ID of the project/epic |
+| prd_file | yes      | Path to the PRD file to spec from |
+| output_dir | no     | Directory to write the spec (default: docs/specs) |
+"""
+
+[[steps]]
+id = "load-prd"
+title = "Load and understand the PRD"
+description = """
+Read and internalize the PRD before writing the spec.
+
+**1. Load assignment:**
+```bash
+bd show {{project}}
+```
+
+**2. Read the PRD:**
+```bash
+cat {{prd_file}}
+```
+
+Note:
+- What components need to be built?
+- What are the data model requirements?
+- What are the API/interface requirements?
+- What are the acceptance criteria implied by the goals?
+
+**3. Check for related technical context:**
+```bash
+bd show {{project}} --refs
+gt mail inbox
+```
+
+Look for any prior technical decisions, existing schemas, or related specs
+attached to the project bead or referenced in mail.
+
+**Exit criteria:** You understand the PRD well enough to write a technical spec.
+"""
+
+[[steps]]
+id = "draft-spec"
+title = "Write the technical specification"
+needs = ["load-prd"]
+description = """
+Write a technical spec from the PRD.
+
+**Output file:** `{{output_dir}}/spec-{{project}}.md`
+
+Use this structure:
+
+```markdown
+# Technical Spec: <feature/project name>
+
+## Overview
+(One paragraph: what this builds and why)
+
+## Architecture
+(Key architectural decisions and rationale)
+
+## Data Model
+(New tables, columns, schemas, or event types)
+
+## API / Interface Contracts
+(Endpoints, event schemas, CLI interfaces, or internal APIs)
+
+## Components
+(Discrete pieces to build — each becomes a task)
+
+### Component: <name>
+**What:** <what it does>
+**Acceptance criteria:**
+- [ ] Criterion 1
+- [ ] Criterion 2
+
+## Out of Scope
+(Explicit exclusions — prevents scope creep during implementation)
+
+## Open Questions
+(Unresolved decisions that reviewers or the human should answer)
+```
+
+Write to the output file:
+```bash
+mkdir -p {{output_dir}}
+# Write your spec to {{output_dir}}/spec-{{project}}.md
+```
+
+**Exit criteria:** Spec file exists. All components are defined with acceptance criteria.
+"""
+
+[[steps]]
+id = "self-review"
+title = "Self-review the spec"
+needs = ["draft-spec"]
+description = """
+Review the spec before committing.
+
+**Check each component:**
+
+| Check | Question |
+|-------|----------|
+| Coverage | Does every PRD goal map to at least one component? |
+| Acceptance criteria | Can a polecat verify each criterion with a test? |
+| Dependencies | Are component dependencies identified? |
+| Data model | Is the schema complete enough to implement from? |
+| API contracts | Are endpoints/events defined with enough detail? |
+| Out of scope | Have common scope-creep items been explicitly excluded? |
+
+Fix gaps. The spec should be implementable without needing to ask the mayor.
+
+**Exit criteria:** Every PRD goal has coverage. Acceptance criteria are testable.
+"""
+
+[[steps]]
+id = "commit-and-persist"
+title = "Commit spec and persist findings"
+needs = ["self-review"]
+description = """
+Commit the spec and update the bead.
+
+**1. Stage and commit:**
+```bash
+git add {{output_dir}}/spec-{{project}}.md
+git commit -m "docs: write technical spec for {{project}} ({{project}})"
+```
+
+**2. Persist spec summary to bead:**
+```bash
+bd update {{project}} --design "Spec written: {{output_dir}}/spec-{{project}}.md
+Components: <list component names>
+Open questions: <count>"
+```
+
+**Exit criteria:** Spec committed. Summary persisted to bead.
+"""
+
+[vars]
+[vars.project]
+description = "Bead ID of the project/epic to write the spec for"
+required = true
+
+[vars.prd_file]
+description = "Path to the PRD file to spec from"
+required = true
+
+[vars.output_dir]
+description = "Directory to write the spec file"
+default = "docs/specs"
