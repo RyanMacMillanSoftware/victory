@@ -1,0 +1,422 @@
+review_only = true  # Coordinator role — findings filed as beads, no code commits
+
+description = """
+Orchestrate the Review Gate pipeline stage for a Victory project.
+
+This formula drives a coordinator (typically the Witness or a review lead)
+through the full consultant review process: dispatching appropriate consultant
+reviews based on artifact type, collecting findings, applying the gate mechanism
+for P0/P1 blockers, and declaring the gate passed or failed.
+
+## Review Gate Role
+
+The Review Gate is the final quality check before a project's work is considered
+ready for delivery. It runs after the Build Cycle and before final acceptance.
+
+## Tiered Intensity
+
+The depth of review depends on the artifact type:
+
+| Artifact Type | Intensity | Consultants |
+|--------------|-----------|-------------|
+| `prd`        | Full      | UX, Quality |
+| `spec`       | Full      | SRE, Quality |
+| `mr`         | Full      | UX, SRE, Quality |
+| `artifact`   | Full      | UX, SRE, Quality |
+| `bead`       | Light     | Quality (focused scan only) |
+
+**Full review**: All relevant consultants review independently, each filing
+findings from their domain perspective.
+
+**Light review**: Quality consultant only, scoped to a single focused pass.
+Appropriate for bead descriptions and status notes — not code or deliverables.
+
+## Gate Mechanism
+
+For P0 and P1 findings, the consultant MUST add a blocking dependency:
+
+```bash
+bd dep add <gate_bead> <finding_bead>
+```
+
+This blocks the gate bead from closing until the finding is resolved.
+P2/P3 findings are informational — they are filed but do not block the gate.
+
+The gate passes only when all blocking (P0/P1) finding beads are closed.
+
+## Finding Severity
+
+| Priority | Label | Description | Gate Impact |
+|----------|-------|-------------|-------------|
+| P0       | Critical | Security vulnerability, data loss, broken pipeline | Blocks gate |
+| P1       | High | Functional defect affecting users or delivery | Blocks gate |
+| P2       | Medium | Code quality, UX friction, operational risk | Non-blocking |
+| P3       | Low | Nice-to-have, improvement opportunity | Non-blocking |
+
+## Variables
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| `artifact` | hook_bead | Path or description of the artifact to review |
+| `artifact_type` | hook_bead | Type: `prd`, `spec`, `mr`, `artifact`, `bead` |
+| `gate_bead` | hook_bead | Bead ID of the Review Gate phase gate bead |
+| `project` | hook_bead | Project slug or root bead ID |
+"""
+formula = "mol-review-gate"
+version = 1
+
+[[steps]]
+id = "load-context"
+title = "Load context and understand the review scope"
+description = """
+Initialize the review session and understand what needs to be reviewed.
+
+**1. Prime your environment:**
+```bash
+gt prime                    # Load role context
+bd prime                    # Load beads context
+```
+
+**2. Read your assignment:**
+```bash
+gt hook                     # Shows your pinned molecule and hook_bead
+bd show {{gate_bead}}       # View the Review Gate bead
+```
+
+**3. Locate the artifact:**
+- If `artifact_type = "mr"`: retrieve the MR diff and commit list
+- If `artifact_type = "prd"` or `"spec"`: read the document at `{{artifact}}`
+- If `artifact_type = "bead"`: run `bd show {{artifact}}` to read the bead
+- If `artifact_type = "artifact"`: read the file at `{{artifact}}`
+
+**4. Understand the project:**
+```bash
+bd show {{project}}         # Project context and history
+```
+
+**5. Check for prior review findings:**
+```bash
+bd dep list {{gate_bead}} --direction=blockers
+```
+Review any pre-existing blockers so you don't duplicate findings.
+
+**6. Confirm you can proceed:**
+- Artifact is accessible and readable
+- Gate bead exists and is open
+- No unresolvable blockers from prior steps
+
+**Exit criteria:** You understand what is being reviewed and can proceed."""
+
+[[steps]]
+id = "classify-intensity"
+title = "Classify review intensity and select consultants"
+needs = ["load-context"]
+description = """
+Determine the review depth based on artifact type.
+
+**Intensity matrix:**
+
+| artifact_type | Intensity | Consultants to engage |
+|--------------|-----------|----------------------|
+| `prd`        | Full      | UX, Quality |
+| `spec`       | Full      | SRE, Quality |
+| `mr`         | Full      | UX, SRE, Quality |
+| `artifact`   | Full      | UX, SRE, Quality |
+| `bead`       | Light     | Quality only |
+
+**For this review:**
+- Artifact type: `{{artifact_type}}`
+- Intensity: determine from table above
+- Consultants: list based on table above
+
+**Full review** — all relevant consultants run independently in parallel:
+- Each consultant reviews from their domain perspective
+- Each files findings as beads
+- P0/P1 findings get blocking deps added to `{{gate_bead}}`
+
+**Light review** — single Quality consultant pass:
+- Focused scan (15 min max) for obvious issues only
+- P0/P1 findings still get blocking deps
+- Lower finding threshold — only file if clearly wrong
+
+**Record your classification:**
+```bash
+bd update {{gate_bead}} --notes "Review started.
+Artifact: {{artifact}}
+Type: {{artifact_type}}
+Intensity: <full|light>
+Consultants: <list>"
+```
+
+**Exit criteria:** Intensity and consultant list determined and recorded."""
+
+[[steps]]
+id = "dispatch-reviews"
+title = "Dispatch consultant reviews"
+needs = ["classify-intensity"]
+description = """
+Create review assignment beads and dispatch to consultants.
+
+**For each consultant in your list:**
+
+```bash
+# Create the review assignment bead
+bd create --title="<ConsultantType> review: {{artifact_type}} for {{project}}" \
+  --type=task --priority=2 \
+  --description="Consultant review assignment.
+
+Artifact: {{artifact}}
+Artifact type: {{artifact_type}}
+Gate bead: {{gate_bead}}
+Project: {{project}}
+Intensity: <full|light>
+
+Review scope:
+<describe what the consultant should focus on for their domain>
+
+Gate mechanism:
+For P0/P1 findings, run:
+  bd dep add {{gate_bead}} <finding-bead-id>
+This blocks the gate until the finding is resolved.
+
+P2/P3 findings: file as beads but do NOT add blocking dep."
+```
+
+**Light review** (bead artifact_type only):
+Create a single review bead for the Quality consultant:
+```bash
+bd create --title="Quality scan: bead {{artifact}} for {{project}}" \
+  --type=task --priority=2 \
+  --description="Light review of bead {{artifact}}.
+Focus: obvious errors, scope drift, missing context.
+Time-box: 15 minutes.
+Gate bead: {{gate_bead}}
+Gate rule: P0/P1 only → bd dep add {{gate_bead}} <finding-bead-id>"
+```
+
+**Record assignment bead IDs:**
+```bash
+bd update {{gate_bead}} --notes "Review dispatched.
+Assignments: <bead-id-1> (UX), <bead-id-2> (SRE), <bead-id-3> (Quality)"
+```
+
+**Note:** In a future automation, this step will attach `mol-consultant-review`
+to each assignment bead and dispatch via the Mayor. For now, review beads are
+created for manual or agent pickup.
+
+**Exit criteria:** One assignment bead created per consultant. Gate bead updated with assignment IDs."""
+
+[[steps]]
+id = "collect-findings"
+title = "Collect and triage all consultant findings"
+needs = ["dispatch-reviews"]
+description = """
+Wait for consultant reviews to complete, then gather all findings.
+
+**1. Poll for review completion:**
+```bash
+# Check each assignment bead for status
+bd show <assignment-bead-id>      # Repeat for each
+```
+
+Wait until all assignment beads are closed (status = closed).
+
+**If a review is taking too long (>30 minutes):**
+```bash
+gt nudge <consultant-address> "Review {{gate_bead}} — any update?"
+```
+
+If no response after an additional 15 minutes:
+```bash
+gt escalate "Review gate stalled" -s HIGH -m "Gate: {{gate_bead}}
+Project: {{project}}
+Pending reviews: <list of open assignment beads>"
+```
+
+**2. Collect all filed findings:**
+```bash
+# Find all beads created by the consultants referencing this gate
+bd list --status=open | grep "{{project}}"
+```
+
+Also check each assignment bead's notes for finding IDs:
+```bash
+bd show <assignment-bead-id>    # Notes should list filed finding IDs
+```
+
+**3. Categorize findings by priority:**
+```
+P0 (Critical): <list bead IDs>
+P1 (High):     <list bead IDs>
+P2 (Medium):   <list bead IDs>
+P3 (Low):      <list bead IDs>
+```
+
+**4. Record the triage:**
+```bash
+bd update {{gate_bead}} --notes "Reviews complete.
+P0 findings: <count> — <bead IDs>
+P1 findings: <count> — <bead IDs>
+P2 findings: <count> — <bead IDs>
+P3 findings: <count> — <bead IDs>"
+```
+
+**Exit criteria:** All consultant reviews closed, all findings catalogued."""
+
+[[steps]]
+id = "apply-gate-mechanism"
+title = "Apply blocking dependencies for P0/P1 findings"
+needs = ["collect-findings"]
+description = """
+For every P0 and P1 finding, add a blocking dependency to the gate bead.
+
+**The gate mechanism:**
+A finding bead blocking the gate means the gate CANNOT close until that
+finding bead is closed. This is how P0/P1 findings enforce the quality bar.
+
+**For each P0 finding bead:**
+```bash
+bd dep add {{gate_bead}} <p0-finding-bead-id>
+```
+
+**For each P1 finding bead:**
+```bash
+bd dep add {{gate_bead}} <p1-finding-bead-id>
+```
+
+**Verify the dependencies are set:**
+```bash
+bd dep list {{gate_bead}} --direction=depends_on
+```
+This should list all P0/P1 finding beads as blockers.
+
+**P2 and P3 findings:**
+Do NOT add blocking deps for P2/P3. They are informational. File them but
+leave the gate unblocked by them.
+
+**Record what was applied:**
+```bash
+bd update {{gate_bead}} --notes "Gate mechanism applied.
+Blocking deps added for:
+<list of bead IDs with bd dep add confirmation>
+Gate will NOT close until these are resolved."
+```
+
+**If no P0/P1 findings:**
+```bash
+bd update {{gate_bead}} --notes "Gate mechanism: no P0/P1 findings. Gate unblocked."
+```
+
+**Exit criteria:** All P0/P1 finding beads are listed as blocking deps on `{{gate_bead}}`."""
+
+[[steps]]
+id = "assess-gate"
+title = "Assess whether the gate passes"
+needs = ["apply-gate-mechanism"]
+description = """
+Determine the current gate status: passing, blocked, or needs escalation.
+
+**1. Check all blocking deps:**
+```bash
+bd dep list {{gate_bead}} --direction=depends_on
+```
+
+**2. For each blocker, check its status:**
+```bash
+bd show <blocker-bead-id> --short
+```
+
+**Gate states:**
+
+| Condition | Gate State | Next Action |
+|-----------|-----------|-------------|
+| No P0/P1 findings | **PASS** | Close gate bead, proceed to next pipeline stage |
+| All P0/P1 findings closed | **PASS** | Close gate bead, proceed |
+| Open P0 findings remain | **BLOCKED (critical)** | Escalate to Witness, notify Mayor |
+| Open P1 findings remain | **BLOCKED** | Leave gate open, update notes |
+
+**For a PASS:**
+```bash
+bd update {{gate_bead}} --notes "Gate assessment: PASS.
+All P0/P1 findings resolved (or none found).
+P2/P3 findings are non-blocking: <list>
+Gate proceeding to close."
+```
+
+**For BLOCKED:**
+```bash
+bd update {{gate_bead}} --notes "Gate assessment: BLOCKED.
+Open blockers: <list of open P0/P1 bead IDs>
+Gate will remain open until these are resolved."
+```
+
+**For P0 blocker:**
+```bash
+gt escalate "Review gate blocked by P0 finding" -s HIGH -m "Gate: {{gate_bead}}
+Project: {{project}}
+P0 finding: <bead-id>
+Title: <finding title>"
+```
+
+**Exit criteria:** Gate state assessed and recorded. Escalation sent if P0 found."""
+
+[[steps]]
+id = "close-gate"
+title = "Close gate (PASS) or leave open (BLOCKED)"
+needs = ["assess-gate"]
+description = """
+Final gate action: close on PASS, leave open on BLOCKED.
+
+**If gate is PASS:**
+```bash
+# Verify no open blocking deps remain
+bd dep list {{gate_bead}} --direction=depends_on
+# All should be closed
+
+# Close the gate bead
+bd close {{gate_bead}} --reason="Review gate passed.
+Consultants: <list>
+Artifact: {{artifact}}
+Findings: P0=0, P1=0 (or: all resolved), P2=<n>, P3=<n>
+Non-blocking findings filed for tracking."
+```
+
+**If gate is BLOCKED:**
+Do NOT close the gate bead. Leave it open with blocking deps.
+
+Notify the project owner:
+```bash
+gt nudge mayor/ "Review gate {{gate_bead}} blocked — {{project}}. Open P0/P1 findings must be resolved before gate can close. See bead for details."
+```
+
+**Post-completion (PASS only):**
+- Gate is closed
+- Pipeline can advance to the next stage
+- P2/P3 finding beads remain open for future cleanup work
+- Your role is complete — run `gt done`
+
+**Post-blocked:**
+- Gate remains open
+- Polecats or other agents are assigned to fix P0/P1 findings
+- Once all blockers are closed, re-run the assess-gate and close-gate steps
+- You may hand off at this point if context is full
+
+**Exit criteria (PASS):** Gate bead closed. `gt done` run.
+**Exit criteria (BLOCKED):** Gate bead left open. Mayor notified. Findings filed and blocking deps set."""
+
+[vars]
+[vars.artifact]
+description = "Path, URL, or bead ID of the artifact to review"
+required = true
+
+[vars.artifact_type]
+description = "Type of artifact: prd, spec, mr, artifact, bead"
+required = true
+
+[vars.gate_bead]
+description = "Bead ID of the Review Gate phase gate bead"
+required = true
+
+[vars.project]
+description = "Project slug or root bead ID"
+required = true
