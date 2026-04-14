@@ -1,7 +1,11 @@
 import { pool } from './connection.js'
 import { diffState } from '../lib/state-diff.js'
-import { broadcast } from '../lib/sse.js'
+import { broadcast, broadcastHtml } from '../lib/sse.js'
 import type { DashboardState, Issue } from '../lib/state-diff.js'
+import { projectsContent } from '../views/project-card.js'
+import { agentsContent } from '../views/agent-row.js'
+import { beadTable } from '../views/bead-table.js'
+import { escalationsContent } from '../views/escalation-item.js'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -110,6 +114,12 @@ async function poll(): Promise<void> {
     for (const panel of ['projects', 'agents', 'beads', 'escalations'] as const) {
       broadcast(panel, next[panel])
     }
+
+    // Broadcast HTML fragments for HTMX SSE swap
+    broadcastHtml('projects', projectsContent(next.projects))
+    broadcastHtml('agents', agentsContent(next.agents))
+    broadcastHtml('beads', beadTable(next.beads))
+    broadcastHtml('escalations', escalationsContent(next.escalations))
 
     currentState = next
   } catch (err) {
