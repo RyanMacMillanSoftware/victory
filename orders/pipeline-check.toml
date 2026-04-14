@@ -1,0 +1,117 @@
+# pipeline-check.toml — Advance stuck pipeline stages
+#
+# Runs every 30 minutes to scan active Victory pipeline molecules for
+# stages that have stalled. A stage is "stuck" when it has been in
+# in_progress or open state longer than its expected duration with no
+# recorded activity (no bead updates, no git commits on the branch).
+#
+# Stuck stages are escalated to the Witness, who either restarts the
+# polecat or escalates further to the Mayor.
+#
+# Scope: all active pipeline molecules in the victory rig
+# Trigger: cron (every 30 minutes)
+# Actor: witness (observes and nudges/escalates)
+
+[order]
+name = "pipeline-check"
+description = "Advance stuck stages: scan active pipeline molecules, detect stalls, escalate for recovery"
+version = 1
+type = "patrol"
+
+[schedule]
+cron = "*/30 * * * *"    # every 30 minutes
+timezone = "UTC"
+enabled = true
+
+[thresholds]
+# How long a polecat can be in_progress before it is considered stuck.
+# Polecats working on complex tasks may legitimately take this long.
+polecat_stuck_minutes = 45
+
+# How long a pipeline stage (non-polecat step) can be open with no
+# bead-level activity before it is flagged as stalled.
+stage_stall_minutes = 60
+
+# How many consecutive stuck detections before escalating to Mayor
+# (rather than just nudging the Witness).
+escalation_threshold = 2
+
+# A build cycle is "dead" (no progress) if this many consecutive
+# dispatch passes produce zero merges. Triggers HIGH-severity escalation.
+dead_cycle_threshold = 2
+
+[scope]
+# Which rig to patrol.
+rig = "victory"
+
+# Only check molecules of these formula types.
+formula_types = [
+    "mol-victory-pipeline",
+    "mol-build-cycle",
+    "mol-prd-draft",
+    "mol-spec-draft",
+    "mol-task-decompose",
+    "mol-review-gate",
+]
+
+# Skip molecules tagged with these labels (e.g., paused by human).
+skip_labels = ["paused", "on-hold"]
+
+[on_stuck_polecat]
+# When a polecat is detected as stuck, notify its Witness.
+# The Witness decides whether to nudge, restart, or escalate further.
+action = "notify_witness"
+witness = "victory/witness"
+message = "PIPELINE_CHECK: polecat {{polecat}} stuck on {{issue}} for {{duration}}. Stage: {{stage}}. Please investigate."
+
+[on_dead_cycle]
+# When a build cycle is dead (no progress after N consecutive passes),
+# escalate directly to Mayor — the Witness couldn't unstick it.
+action = "escalate"
+escalation_severity = "HIGH"
+escalation_message = "Build cycle dead: project {{project}} — {{dead_cycle_threshold}} consecutive dispatch passes with zero merges. Last beads: {{bead_ids}}. Please intervene."
+
+[on_stalled_stage]
+# When a non-polecat pipeline stage is stalled (waiting for human gate
+# or external dependency), notify Mayor for decision.
+action = "notify_mayor"
+message = "PIPELINE_CHECK: stage {{stage}} on project {{project}} has been open for {{duration}} with no activity. Gate may be stuck. Please review."
+
+[on_failure]
+# If the check itself fails (Dolt down, command error), escalate.
+escalate = true
+escalation_severity = "HIGH"
+escalation_message = "pipeline-check order failed: {{reason}}"
+
+[instructions]
+# Step-by-step instructions for the agent executing this order.
+steps = """
+1. Verify Dolt health:
+   gt dolt status
+   If Dolt is unhealthy, abort and escalate (do not restart Dolt yourself).
+
+2. List all active pipeline molecules:
+   bd mol list --formula mol-victory-pipeline --status=open --json
+   Also check sub-formulas:
+   bd mol list --formula mol-build-cycle --status=open --json
+
+3. For each active pipeline molecule:
+   a. Check current stage:
+      bd mol status <mol-id>
+   b. Check stage age:
+      Compare current time against step's last_activity timestamp.
+   c. If polecat step and age > polecat_stuck_minutes:
+      Identify the assigned polecat: bd show <bead-id>
+      Send on_stuck_polecat notification to Witness.
+   d. If non-polecat stage and age > stage_stall_minutes:
+      Send on_stalled_stage notification to Mayor.
+
+4. Check for dead build cycles:
+   For each active mol-build-cycle:
+     Read cycle metadata: bd show <mol-bead-id> --notes
+     If consecutive_empty_dispatches >= dead_cycle_threshold:
+       Execute on_dead_cycle escalation.
+
+5. Report summary:
+   Log: "pipeline-check: N molecules scanned, N stuck polecats, N stalled stages, N dead cycles"
+"""

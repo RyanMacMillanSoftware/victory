@@ -1,0 +1,143 @@
+# stale-project-detect.toml — Detect and report stale projects
+#
+# Runs daily to identify Victory projects that have had no pipeline
+# activity for an extended period. A "stale" project is one where:
+#   - The root epic bead is open but has had no descendant bead updates
+#   - No git commits have landed for this project in N days
+#   - No polecats are currently assigned to project beads
+#
+# Stale projects are not automatically closed or cancelled — they are
+# surfaced to the Mayor for a decision: resume, defer, or close.
+#
+# Scope: all open epic beads in the victory rig
+# Trigger: cron (daily at 06:00 UTC)
+# Actor: mayor (receives report, decides action)
+
+[order]
+name = "stale-project-detect"
+description = "Detect stale projects: find open epics with no pipeline activity in N days, report to Mayor"
+version = 1
+type = "audit"
+
+[schedule]
+cron = "0 6 * * *"    # 06:00 UTC daily
+timezone = "UTC"
+enabled = true
+
+[thresholds]
+# A project is "stale" if it has had no bead activity for this many days.
+stale_days = 3
+
+# A project is "dormant" (more urgent) if stale for this many days.
+# Dormant projects get higher-severity escalation.
+dormant_days = 7
+
+# Minimum number of open child beads for a project to be considered
+# active enough to warrant stale detection. Projects with 0 open beads
+# are complete (or already deferred) — skip them.
+min_open_beads = 1
+
+[scope]
+# Which rig to audit.
+rig = "victory"
+
+# Bead labels that identify a root pipeline epic.
+epic_labels = ["pipeline"]
+
+# Bead statuses that indicate a project is still in flight.
+active_statuses = ["open", "in_progress", "blocked"]
+
+# Labels that exempt a project from stale detection.
+# Use "paused" to manually freeze a project without triggering alerts.
+exempt_labels = ["paused", "deferred", "on-hold"]
+
+[report]
+# Where to send the stale project report.
+recipient = "mayor/"
+subject = "STALE_PROJECTS: {{stale_count}} projects need attention ({{date}})"
+
+# Include these fields in the report for each stale project.
+include_fields = [
+    "project_slug",
+    "epic_bead_id",
+    "last_activity",
+    "days_since_activity",
+    "open_bead_count",
+    "current_stage",
+    "assigned_polecats",
+]
+
+[on_no_stale_projects]
+# When no stale projects are found, do not send a report.
+# Silence keeps the Mayor's inbox clean during healthy periods.
+action = "silent"
+
+[on_stale]
+# Severity for projects stale >= stale_days but < dormant_days.
+severity = "MEDIUM"
+action = "report"    # include in daily report, no immediate escalation
+
+[on_dormant]
+# Severity for projects stale >= dormant_days. These get a dedicated
+# escalation in addition to appearing in the report.
+severity = "HIGH"
+action = "escalate_and_report"
+escalation_message = "Project {{project_slug}} ({{epic_bead_id}}) has had no activity for {{days}} days. Last stage: {{stage}}. Please decide: resume, defer, or close."
+
+[on_failure]
+# If the audit itself fails, escalate so the Mayor knows the check didn't run.
+escalate = true
+escalation_severity = "HIGH"
+escalation_message = "stale-project-detect order failed: {{reason}}"
+
+[instructions]
+# Step-by-step instructions for the agent executing this order.
+steps = """
+1. Verify Dolt health:
+   gt dolt status
+   If Dolt is unhealthy, abort and escalate.
+
+2. Find all open pipeline epics:
+   bd list --label pipeline --status=open --rig victory --json
+   Also check in_progress epics:
+   bd list --label pipeline --status=in_progress --rig victory --json
+
+3. For each epic bead:
+   a. Skip if labeled with any exempt_labels.
+   b. Count open child beads:
+      bd list --parent <epic-id> --status=open --count
+      If count < min_open_beads, skip (project is complete or quiescent).
+   c. Find last activity timestamp:
+      bd show <epic-id> --long | grep last_activity
+      Also check child beads: bd list --parent <epic-id> --sort=updated --limit=1
+   d. Calculate days since last activity.
+   e. Classify:
+      - days >= dormant_days → DORMANT
+      - days >= stale_days   → STALE
+      - else                 → ACTIVE (skip)
+
+4. If no stale or dormant projects found:
+   Execute on_no_stale_projects (silent exit).
+
+5. For each DORMANT project:
+   Execute on_dormant escalation immediately.
+
+6. Compose and send the daily report to Mayor (if any stale/dormant found):
+   gt mail send mayor/ -s "STALE_PROJECTS: N projects need attention (YYYY-MM-DD)" \
+     -m "## Stale Project Report — $(date -u +%Y-%m-%d)
+
+   ### Dormant (>= dormant_days days, no activity)
+   <list dormant projects with fields>
+
+   ### Stale (>= stale_days days, no activity)
+   <list stale projects with fields>
+
+   ### Recommended actions
+   - RESUME: re-dispatch the current stage bead to an available polecat
+   - DEFER: bd update <epic-id> --status=deferred
+   - CLOSE: bd close <epic-id> --reason='stale: no longer relevant'
+   "
+
+7. Log summary:
+   "stale-project-detect: N epics scanned, N stale, N dormant, report sent to Mayor"
+"""

@@ -1,0 +1,90 @@
+# overnight-build.toml — Hourly build dispatch order
+#
+# Runs every hour to pick up ready beads and dispatch them to available
+# polecats. This is the automated heartbeat of the Victory delivery pipeline.
+# Without this order, projects only advance when a human or orchestrator
+# manually calls `gt sling`.
+#
+# Scope: all active projects in the victory rig
+# Trigger: cron (hourly)
+# Actor: mayor (dispatches beads via gt sling)
+
+[order]
+name = "overnight-build"
+description = "Hourly dispatch: find ready beads across all active projects and sling them to available polecats"
+version = 1
+type = "dispatch"
+
+[schedule]
+cron = "0 * * * *"    # top of every hour
+timezone = "UTC"
+enabled = true
+
+[dispatch]
+# Maximum polecats to sling in one pass. Keeps the rig from being
+# overwhelmed when a large batch of beads unlocks at the same time.
+max_parallel = 4
+
+# Only dispatch beads in the victory rig
+rig = "victory"
+
+# Labels that must be present for a bead to be eligible for dispatch.
+# Empty list = all open ready beads in the rig.
+required_labels = []
+
+# Labels that disqualify a bead from dispatch (e.g., manual review pending).
+exclude_labels = ["on-hold", "human-review"]
+
+[gates]
+# Skip dispatch if the rig has no available polecats.
+require_available_polecat = true
+
+# Skip dispatch if the scheduler is paused.
+respect_scheduler_pause = true
+
+# Do not dispatch if Dolt latency exceeds this threshold (ms).
+# A laggy Dolt server causes bd commands to hang inside polecats.
+max_dolt_latency_ms = 2000
+
+[on_no_work]
+# What to do when `bd ready` returns zero beads.
+# "silent" = log nothing (reduces noise during quiet periods)
+# "log"    = write a brief note to the order log
+action = "silent"
+
+[on_failure]
+# What to do when dispatch fails (e.g., all polecats busy, Dolt down).
+# Escalate to the Mayor so a human can investigate.
+escalate = true
+escalation_severity = "HIGH"
+escalation_message = "overnight-build order failed to dispatch: {{reason}}"
+
+[instructions]
+# Step-by-step instructions for the agent executing this order.
+# The executor (Mayor or Deacon) follows these commands in sequence.
+steps = """
+1. Verify Dolt health:
+   gt dolt status
+   If latency > max_dolt_latency_ms or server is down, abort and escalate.
+
+2. Check scheduler state:
+   gt scheduler status
+   If paused, log "Scheduler paused — skipping dispatch" and exit cleanly.
+
+3. Find ready beads:
+   bd ready --rig victory --json
+   If zero results, exit cleanly (on_no_work action).
+
+4. Check available polecats:
+   gt polecat list --available --json
+   If none available, log "No polecats available — will retry next cycle" and exit.
+
+5. Dispatch up to max_parallel beads:
+   For each ready bead (up to max_parallel):
+     bd update <bead-id> --status=in_progress
+     gt sling <bead-id>
+   Log each dispatch: "Dispatched <bead-id> to polecat/<name>"
+
+6. Report:
+   Log summary: "overnight-build: dispatched N beads, N polecats now working"
+"""
