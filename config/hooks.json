@@ -1,0 +1,18 @@
+{
+  "_doc": "Victory Gas City provider hook config — Claude Code PreToolUse hooks for polecat sessions.",
+  "_usage": "Merge the 'hooks' key into polecats/.claude/settings.json to activate RTK token compression for all polecat Bash commands.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "_doc": "RTK token compression — rewrites Bash commands to use rtk subcommands (git, go, npm, etc.) for LLM context savings. Requires rtk >= 0.23.0 installed globally via: cargo install rtk",
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/rtk-rewrite.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -39,3 +39,18 @@ prefer_nudge = true
 # Escalation targets
 witness = "victory/witness"
 mayor = "mayor"
+
+[rtk]
+# RTK (Refinery Token Kit) — token-efficient CLI proxy for LLM sessions.
+# Rewrites common commands (git, go, npm, etc.) to compact-output equivalents,
+# reducing context consumption without changing semantics.
+#
+# Install: cargo install rtk  (requires >= 0.23.0)
+# Global setup: rtk init -g   (installs hook + RTK.md into ~/.claude/)
+#
+# Hook config: config/hooks.json defines the PreToolUse hook that rewrites
+# Bash commands. Merge into polecats/.claude/settings.json to activate.
+enabled = true
+min_version = "0.23.0"
+hook_script = "$HOME/.claude/hooks/rtk-rewrite.sh"
+provider_hooks_config = "config/hooks.json"
