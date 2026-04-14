@@ -1,0 +1,183 @@
+description = """
+PRD drafting formula for the Victory pipeline.
+
+The planner agent reads a project brief and produces a structured Product
+Requirements Document (PRD). This formula covers the single-stage PRD creation
+step used inside the full pipeline.
+
+## Inputs
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| brief | pipeline vars | Project brief, idea, or feature description |
+| project | pipeline vars | Short slug for this project (e.g., "auth-v2") |
+| context | pipeline vars | Additional context: constraints, prior decisions |
+
+## Output
+
+A PRD file at `projects/{{project}}/prd.md` ready for downstream spec drafting.
+"""
+formula = "mol-prd-draft"
+version = 1
+
+[[steps]]
+id = "understand-brief"
+title = "Read and understand the project brief"
+description = """
+Before drafting anything, deeply understand what is being asked.
+
+**1. Read the brief:**
+The `{{brief}}` variable contains the raw input. Read it carefully.
+
+If additional context was provided (`{{context}}`), read that too.
+
+**2. Check for prior art:**
+```bash
+# Does a prior PRD exist?
+ls projects/{{project}}/ 2>/dev/null
+```
+
+If `projects/{{project}}/prd.md` already exists, read it:
+```bash
+cat projects/{{project}}/prd.md
+```
+
+If a prior PRD exists, this is a revision. Note what changed.
+
+**3. Identify ambiguities:**
+List the things you know, the things you're inferring, and the things
+you don't know. Ambiguities will surface in the PRD's Open Questions section.
+
+**4. Create the project directory:**
+```bash
+mkdir -p projects/{{project}}
+```
+
+**Exit criteria:** You understand the brief and know what PRD to write.
+"""
+
+[[steps]]
+id = "draft-prd"
+needs = ["understand-brief"]
+title = "Write the PRD"
+description = """
+Write a structured Product Requirements Document.
+
+**Create `projects/{{project}}/prd.md`** with this structure:
+
+```markdown
+# PRD: {{project}}
+
+_Status: draft — {{date}}_
+
+## Problem Statement
+(What problem are we solving? For whom? Why now?)
+
+## Goals
+(What success looks like — specific and measurable where possible)
+
+## Non-Goals
+(Explicitly out of scope — prevents scope creep)
+
+## User Stories / Scenarios
+(How will this be used? Who are the actors? Walk through key flows.)
+
+## Constraints
+(Technical, business, timeline, or resource constraints)
+
+## Open Questions
+(Things you know are unknown. These gate the next stage.)
+
+## Rough Approach
+(Initial direction — not a plan, just enough to inform the spec stage)
+```
+
+**Writing principles:**
+- Breadth over depth. Expose uncertainty rather than hiding it.
+- No implementation details in the PRD — that's the spec's job.
+- Open Questions should be specific: "Should auth support SSO?" not "auth questions".
+- Goals must be verifiable. "Users can log in within 2s" not "fast login".
+- Non-Goals are as important as Goals — they prevent scope creep.
+
+**Exit criteria:** `projects/{{project}}/prd.md` exists and covers all sections.
+"""
+
+[[steps]]
+id = "prd-self-review"
+needs = ["draft-prd"]
+title = "Self-review the PRD"
+description = """
+Review the PRD before submitting it downstream.
+
+**1. Read the draft back:**
+```bash
+cat projects/{{project}}/prd.md
+```
+
+**2. Check against this rubric:**
+
+| Section | Quality Bar |
+|---------|-------------|
+| Problem Statement | Clear problem, clear user, clear urgency |
+| Goals | Each goal is specific and verifiable |
+| Non-Goals | At least 2-3 explicit exclusions |
+| User Stories | At least 1 concrete scenario with named actor |
+| Constraints | Real constraints, not wishlists |
+| Open Questions | Specific, not vague |
+| Rough Approach | Points to implementation direction without prescribing it |
+
+**3. Fix issues found:**
+Edit `projects/{{project}}/prd.md` directly. No need to commit between draft and fix.
+
+**4. Check that the PRD does NOT contain:**
+- Implementation details (that's the spec's job)
+- TODOs or placeholders in the Goals/Non-Goals sections
+- Vague goals like "improve performance" with no measurement
+
+**Exit criteria:** PRD passes the rubric. Grade B or better on all sections.
+"""
+
+[[steps]]
+id = "persist-prd"
+needs = ["prd-self-review"]
+title = "Commit the PRD and signal downstream"
+description = """
+Commit the PRD to git and signal the pipeline to proceed.
+
+**1. Stage and commit:**
+```bash
+git add projects/{{project}}/prd.md
+git commit -m "docs: add PRD for {{project}} ({{issue}})"
+```
+
+**2. Update the project tracking bead with the PRD location:**
+```bash
+bd update {{issue}} --notes "PRD complete: projects/{{project}}/prd.md"
+```
+
+**3. Confirm the file is committed:**
+```bash
+git show --stat HEAD
+```
+
+**Exit criteria:** PRD is committed. Bead notes updated with file path.
+"""
+
+[vars]
+[vars.brief]
+description = "Project brief, idea, or feature description (raw natural language)"
+required = true
+
+[vars.project]
+description = "Short slug for this project (e.g., 'auth-v2', 'notification-levels')"
+required = true
+
+[vars.context]
+description = "Additional context: constraints, related code, prior decisions"
+required = false
+default = ""
+
+[vars.issue]
+description = "Tracking bead ID for this project"
+required = false
+default = ""

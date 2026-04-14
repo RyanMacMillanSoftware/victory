@@ -1,0 +1,264 @@
+description = """
+Build cycle formula for the Victory pipeline.
+
+One iteration of the build loop: find ready work, dispatch it to polecats,
+monitor completion, collect results, and advance the pipeline stage.
+
+This formula is designed to be run repeatedly until all tasks for a project
+are complete. Each invocation processes one batch of ready work.
+
+## How the Build Cycle Works
+
+```
+ready-check ─► dispatch-work ─► monitor-progress ─► collect-results ─► advance-stage
+```
+
+Each cycle:
+1. Finds beads in `ready` state for this project
+2. Dispatches each ready bead to an available polecat
+3. Monitors until all dispatched beads are complete (merged or failed)
+4. Collects results (success/failure) and updates project state
+5. Determines whether to loop again or advance to the next pipeline stage
+
+## Inputs
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| project | pipeline vars | Project slug |
+| issue | pipeline vars | Parent epic bead ID |
+| max_parallel | pipeline vars | Max polecats to dispatch in parallel (default: 4) |
+"""
+formula = "mol-build-cycle"
+version = 1
+
+[[steps]]
+id = "ready-check"
+title = "Find ready beads for this project"
+description = """
+Identify which beads are unblocked and ready to be dispatched.
+
+**1. List ready beads for this project:**
+```bash
+bd ready --label project:{{project}}
+```
+
+**2. Also check the overall project state:**
+```bash
+bd list --label project:{{project}} --status=open
+bd list --label project:{{project}} --status=in_progress
+```
+
+**3. Assess the situation:**
+
+| State | Action |
+|-------|--------|
+| Ready beads exist | Proceed to dispatch |
+| No ready beads, in_progress exist | Monitor — work is running |
+| No ready AND no in_progress | All tasks complete — advance pipeline |
+| Blocked beads only | Investigate blockers |
+
+**4. If all tasks are complete:**
+```bash
+bd list --label project:{{project}} --status=open
+```
+If this returns nothing, all tasks are merged. Skip to advance-stage.
+
+**5. If there are blockers to investigate:**
+```bash
+bd blocked --label project:{{project}}
+```
+Check if any blocked beads have their dependencies resolved.
+
+**Exit criteria:** You know which beads are ready to dispatch, or you know
+the project is complete.
+"""
+
+[[steps]]
+id = "dispatch-work"
+needs = ["ready-check"]
+title = "Dispatch ready beads to polecats"
+description = """
+Sling ready beads to available polecats, up to `{{max_parallel}}` in parallel.
+
+**1. Get the list of ready beads:**
+```bash
+bd ready --label project:{{project}} --limit {{max_parallel}}
+```
+
+**2. For each ready bead, claim it and dispatch:**
+```bash
+# Mark as in_progress (prevents double-dispatch)
+bd update <bead-id> --status=in_progress
+
+# Dispatch to a polecat
+gt sling <bead-id>
+```
+
+**3. Dispatch all ready beads up to the parallel limit ({{max_parallel}}):**
+Dispatch them one by one. Do not exceed `{{max_parallel}}` concurrent polecats.
+
+**4. Record which polecats are handling which beads:**
+```bash
+bd update {{issue}} --notes "Dispatch batch: <bead-id-1> → polecat/<name>, <bead-id-2> → polecat/<name>"
+```
+
+**5. If no polecats are available:**
+Wait and retry:
+```bash
+gt polecat list --available
+# If none available, wait 30s and check again
+```
+
+**Exit criteria:** All ready beads (up to `{{max_parallel}}`) have been dispatched
+to polecats. Bead statuses updated to `in_progress`.
+"""
+
+[[steps]]
+id = "monitor-progress"
+needs = ["dispatch-work"]
+title = "Monitor dispatched polecats until batch completes"
+description = """
+Wait for the current batch of polecats to finish, then collect results.
+
+**Monitoring loop (run until all dispatched beads are resolved):**
+
+```bash
+# Check active polecats
+gt polecat list
+
+# Check bead statuses
+bd list --label project:{{project}} --status=in_progress
+```
+
+**Poll every 2 minutes:**
+1. Count in_progress beads for this project
+2. Count open beads with no assignee (failed or never dispatched)
+3. Count closed beads (done)
+
+**Handle stuck polecats:**
+If a polecat has been in_progress for >30 minutes with no git activity:
+```bash
+gt peek <rig>/polecats/<name>         # Check what they're doing
+gt nudge <rig>/polecats/<name> "How's progress? Need help?"
+```
+
+If stuck >45 minutes with no response:
+```bash
+gt mail send victory/witness -s "HELP: Polecat stuck on {{project}}" \
+  --stdin <<'BODY'
+Project: {{project}}
+Polecat: <name>
+Bead: <bead-id>
+Symptom: No activity for 45+ minutes
+BODY
+```
+
+**Exit criteria:** All dispatched beads from this batch are either:
+- `closed` (work merged into main), or
+- back to `open` with no assignee (failed — will retry next cycle)
+"""
+
+[[steps]]
+id = "collect-results"
+needs = ["monitor-progress"]
+title = "Collect and record batch results"
+description = """
+After the batch completes, record what happened and identify any failures.
+
+**1. Get the final state of this batch:**
+```bash
+bd list --label project:{{project}}
+```
+
+**2. Tally results:**
+- Closed beads: success (work merged)
+- Open beads: need retry or investigation
+
+**3. For each failed bead (returned to open state):**
+```bash
+bd show <failed-bead-id>
+```
+
+Check the bead notes for merge rejection details. The refinery writes failure
+details to the bead when it rejects a merge.
+
+If a bead has been rejected twice, escalate:
+```bash
+bd update <failed-bead-id> --add-label needs-review
+gt mail send victory/witness -s "BLOCKED: Repeated failure on {{project}}" \
+  -m "Bead <id> has failed twice. Notes: $(bd show <id> | grep -A 5 'MERGE REJECTION')"
+```
+
+**4. Update the epic with batch results:**
+```bash
+bd update {{issue}} --notes "Build batch complete: <N> merged, <M> failed. Failed: <ids>"
+```
+
+**5. Print a summary:**
+```
+Build Cycle Results: {{project}}
+  Merged: <N> beads (<ids>)
+  Failed: <M> beads (<ids>) — will retry next cycle
+  Remaining: <K> beads still open
+```
+
+**Exit criteria:** Results recorded. Failed beads identified and labeled.
+"""
+
+[[steps]]
+id = "advance-stage"
+needs = ["collect-results"]
+title = "Advance pipeline stage or loop"
+description = """
+Determine whether to run another build cycle or advance to the review gate.
+
+**1. Check if all project tasks are complete:**
+```bash
+bd list --label project:{{project}} --status=open
+bd list --label project:{{project}} --status=in_progress
+```
+
+**Decision logic:**
+
+**Case A: Open or in_progress beads remain**
+Another cycle is needed. Update the epic:
+```bash
+bd update {{issue}} --notes "Build cycle complete. Remaining: <count> open beads. Running next cycle."
+```
+Signal the pipeline to run another build-cycle.
+
+**Case B: All beads closed (project complete)**
+All implementation tasks are merged. Advance to review gate.
+```bash
+bd update {{issue}} --notes "All tasks merged. Build phase complete. Advancing to review gate."
+```
+Signal the pipeline to run mol-review-gate.
+
+**Case C: Only failed/blocked beads remain (no ready beads, no in_progress)**
+The build is stuck. Escalate:
+```bash
+gt escalate "Build cycle stuck: {{project}} — all open beads are blocked or repeatedly failing" \
+  -s HIGH \
+  -m "Project: {{project}}
+Open blocked beads: $(bd list --label project:{{project}} --status=open --short)
+Please investigate and unblock."
+```
+
+**Exit criteria:** Either another build cycle is queued, the pipeline advances to
+review, or a stuck state is escalated.
+"""
+
+[vars]
+[vars.project]
+description = "Project slug — must match the label on all project beads"
+required = true
+
+[vars.issue]
+description = "Parent epic bead ID for progress tracking"
+required = false
+default = ""
+
+[vars.max_parallel]
+description = "Maximum number of polecats to dispatch in parallel per cycle"
+required = false
+default = "4"

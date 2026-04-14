@@ -1,0 +1,315 @@
+description = """
+Repository onboarding formula for the Victory pipeline.
+
+Onboards a new repository into the Victory rig: detects the tech stack,
+scans existing conventions, analyzes any existing AGENTS.md, and produces
+a fully-populated AGENTS.md that tells Victory's agents how to work in this
+repo.
+
+## What This Produces
+
+A committed `AGENTS.md` at the repo root with:
+- Stack detection (language, framework, test harness, lint tools)
+- Build/test/lint commands (the quality gate configuration)
+- Conventions (naming, file layout, commit style)
+- Core rules (what "done" means for polecats in this repo)
+- Known pitfalls (things polecats frequently get wrong)
+
+## Inputs
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| repo_path | onboard vars | Absolute path to the repo root |
+| repo_name | onboard vars | Short name for this repo (e.g., "beads", "victory") |
+| issue | onboard vars | Tracking bead ID |
+"""
+formula = "mol-onboard-repo"
+version = 1
+
+[[steps]]
+id = "detect-stack"
+title = "Detect the technology stack"
+description = """
+Identify what languages, frameworks, and tools this repo uses.
+
+**1. Navigate to the repo:**
+```bash
+cd {{repo_path}}
+pwd
+```
+
+**2. Detect primary language:**
+```bash
+# Look for language indicators
+ls *.go go.mod go.sum 2>/dev/null && echo "LANG: Go"
+ls package.json *.ts *.js 2>/dev/null && echo "LANG: TypeScript/JavaScript"
+ls Cargo.toml *.rs 2>/dev/null && echo "LANG: Rust"
+ls *.py requirements.txt pyproject.toml 2>/dev/null && echo "LANG: Python"
+ls *.rb Gemfile 2>/dev/null && echo "LANG: Ruby"
+```
+
+**3. Detect build system:**
+```bash
+ls Makefile 2>/dev/null && cat Makefile | head -40
+ls package.json 2>/dev/null && cat package.json | python3 -m json.tool 2>/dev/null | grep -A 30 '"scripts"' || cat package.json | grep -A 30 '"scripts"'
+ls go.mod 2>/dev/null && cat go.mod
+ls Cargo.toml 2>/dev/null && cat Cargo.toml | head -30
+```
+
+**4. Detect test harness:**
+```bash
+# Go
+ls *_test.go 2>/dev/null | head -3
+grep -r "func Test" --include="*.go" -l 2>/dev/null | head -3
+
+# JS/TS
+ls jest.config.* vitest.config.* 2>/dev/null
+grep -i "\"test\"" package.json 2>/dev/null
+
+# Python
+ls pytest.ini setup.cfg pyproject.toml 2>/dev/null
+
+# Rust
+grep "\\[\\[test\\]\\]" Cargo.toml 2>/dev/null
+```
+
+**5. Detect lint/format tools:**
+```bash
+ls .eslintrc* .eslintignore 2>/dev/null && echo "LINT: eslint"
+ls .golangci.yml golangci.toml 2>/dev/null && echo "LINT: golangci-lint"
+ls .rustfmt.toml 2>/dev/null && echo "FORMAT: rustfmt"
+ls biome.json 2>/dev/null && echo "LINT: biome"
+ls prettier.config.* .prettierrc* 2>/dev/null && echo "FORMAT: prettier"
+```
+
+**6. Record detected stack in a scratchpad:**
+Note: language, framework, build tool, test runner, lint tool, format tool.
+
+**Exit criteria:** You know the primary language and have candidate commands
+for build, test, and lint.
+"""
+
+[[steps]]
+id = "scan-conventions"
+needs = ["detect-stack"]
+title = "Scan repo conventions and patterns"
+description = """
+Understand how this repo is structured and what conventions it follows.
+
+**1. Read existing AGENTS.md if present:**
+```bash
+cat {{repo_path}}/AGENTS.md 2>/dev/null || echo "No AGENTS.md — generating from scratch."
+cat {{repo_path}}/CLAUDE.md 2>/dev/null || true
+cat {{repo_path}}/README.md 2>/dev/null | head -60 || true
+```
+
+**2. Inspect directory structure:**
+```bash
+find {{repo_path}} -maxdepth 3 -type d | grep -v ".git\\|node_modules\\|vendor\\|.build\\|dist\\|target" | sort
+```
+
+**3. Sample file naming conventions:**
+```bash
+# Find representative source files
+find {{repo_path}} -maxdepth 4 -name "*.go" -o -name "*.ts" -o -name "*.rs" -o -name "*.py" 2>/dev/null | grep -v "test\\|spec\\|vendor\\|node_modules" | head -15
+```
+
+**4. Scan commit history for conventions:**
+```bash
+cd {{repo_path}} && git log --oneline -20 2>/dev/null || true
+```
+
+Note: Are commits using conventional commits? What types are common?
+Is there an issue reference pattern in commit messages?
+
+**5. Check CI configuration:**
+```bash
+cat {{repo_path}}/.github/workflows/*.yml 2>/dev/null | head -100 || true
+cat {{repo_path}}/.circleci/config.yml 2>/dev/null | head -50 || true
+```
+
+CI reveals the authoritative build/test/lint commands.
+
+**6. Try the detected commands (dry run to confirm they work):**
+```bash
+cd {{repo_path}}
+
+# Go
+go build ./... 2>&1 | tail -5 || true
+
+# Node/Bun
+bun run build 2>&1 | tail -5 || npm run build 2>&1 | tail -5 || true
+
+# Rust
+cargo check 2>&1 | tail -5 || true
+```
+
+**Exit criteria:** You understand the directory layout, naming conventions,
+and have verified quality gate commands.
+"""
+
+[[steps]]
+id = "generate-agents-md"
+needs = ["scan-conventions"]
+title = "Generate AGENTS.md"
+description = """
+Write a fully-populated AGENTS.md for this repository.
+
+**Create `{{repo_path}}/AGENTS.md`** with this structure:
+
+```markdown
+# {{repo_name}} — Agent Guide
+
+> Generated by Victory onboarder. Keep this up to date as conventions evolve.
+
+## Stack
+- Language: <detected language and version>
+- Framework: <detected framework if any>
+- Build: <build tool>
+- Test: <test runner>
+- Lint: <lint tool>
+- Format: <format tool>
+
+## Quality Gates
+
+Every polecat MUST run these before committing. Worktrees may not trigger
+pre-commit hooks — run manually:
+
+```bash
+# Build (REQUIRED — must pass)
+<build_command>
+
+# Tests (REQUIRED — all must pass)
+<test_command>
+
+# Lint (REQUIRED if configured)
+<lint_command>
+
+# Format (REQUIRED if configured)
+<format_command>
+```
+
+## Core Rule
+
+Work is NOT done until:
+1. `<build_command>` passes
+2. `<test_command>` passes
+3. `<lint_command>` passes (if configured)
+4. Changes committed to feature branch
+5. `gt done` run
+
+**Never commit with failing tests or lint errors.**
+
+## Conventions
+
+### File Layout
+<describe the directory structure and what goes where>
+
+### Naming
+<naming conventions: files, functions/methods, variables, constants>
+
+### Commit Style
+<conventional commits format if used, example commits from git log>
+
+### Testing
+<where tests live, naming pattern, test runner flags, what level of coverage is expected>
+
+## Known Pitfalls
+<things polecats frequently get wrong in this repo>
+1. <pitfall>: <explanation and how to avoid>
+2. <pitfall>: <explanation and how to avoid>
+
+## Key Files
+<most important files a polecat should read before starting work>
+- `<path>`: <what it is and why it matters>
+
+## Dependencies
+<how to add/update dependencies if needed>
+```
+
+**Writing principles:**
+- Make it prescriptive, not descriptive. Polecats need instructions, not observations.
+- Include exact commands, not "run the build command".
+- The Core Rule section is the gating criteria — be specific.
+- Known Pitfalls should come from your scan: things you noticed that could trip up
+  a polecat (e.g., "The test runner requires a running Dolt server on :3307").
+
+**Exit criteria:** `{{repo_path}}/AGENTS.md` exists and covers all sections.
+"""
+
+[[steps]]
+id = "verify-onboarded"
+needs = ["generate-agents-md"]
+title = "Verify the onboarding and commit"
+description = """
+Validate the AGENTS.md is correct and commit it to the repo.
+
+**1. Read back the AGENTS.md:**
+```bash
+cat {{repo_path}}/AGENTS.md
+```
+
+**2. Verify quality gate commands actually work:**
+```bash
+cd {{repo_path}}
+
+# Run each command from the Quality Gates section
+# Confirm they exit 0 (or explain expected non-zero)
+```
+
+**3. Check AGENTS.md completeness rubric:**
+
+| Section | Must Have |
+|---------|-----------|
+| Stack | Language, at minimum |
+| Quality Gates | At least build and test commands |
+| Core Rule | Explicit done criteria |
+| Conventions | File layout and naming |
+| Known Pitfalls | At least 1 specific pitfall |
+
+If any section is missing or vague, fix it before committing.
+
+**4. Commit the AGENTS.md:**
+```bash
+cd {{repo_path}}
+git add AGENTS.md
+git commit -m "chore: add Victory AGENTS.md for {{repo_name}} onboarding ({{issue}})"
+```
+
+**5. Update the tracking bead:**
+```bash
+bd update {{issue}} --notes "Onboarding complete for {{repo_name}}: AGENTS.md committed.
+Stack: <stack summary>
+Build: <build_command>
+Test: <test_command>"
+```
+
+**6. Print onboarding summary:**
+```
+Onboarding Complete: {{repo_name}}
+
+Stack: <language> + <framework>
+Build: <build_command>
+Test: <test_command>
+Lint: <lint_command>
+
+AGENTS.md committed to {{repo_path}}.
+This repo is now ready for Victory polecats.
+```
+
+**Exit criteria:** AGENTS.md committed. Commands verified. Bead updated.
+"""
+
+[vars]
+[vars.repo_path]
+description = "Absolute path to the repository root to onboard"
+required = true
+
+[vars.repo_name]
+description = "Short identifier for this repo (e.g., 'beads', 'victory', 'gastown')"
+required = true
+
+[vars.issue]
+description = "Tracking bead ID for this onboarding task"
+required = false
+default = ""

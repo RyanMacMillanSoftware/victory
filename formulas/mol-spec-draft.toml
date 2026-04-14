@@ -1,0 +1,232 @@
+description = """
+Technical spec drafting formula for the Victory pipeline.
+
+The planner agent reads the approved PRD and produces a concrete technical
+specification: architecture, data model, API contracts, file layout, and
+implementation phases ready for task decomposition.
+
+## Inputs
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| project | pipeline vars | Project slug matching the PRD directory |
+| issue | pipeline vars | Tracking bead ID for context |
+| context | pipeline vars | Additional technical context |
+
+## Output
+
+A technical spec at `projects/{{project}}/spec.md` with enough detail for
+a polecat to implement each section without further planning.
+"""
+formula = "mol-spec-draft"
+version = 1
+
+[[steps]]
+id = "read-prd"
+title = "Read the PRD and assess scope"
+description = """
+Load the PRD and understand the technical requirements before designing.
+
+**1. Read the PRD:**
+```bash
+cat projects/{{project}}/prd.md
+```
+
+**2. Read the AGENTS.md for this repo** (if it exists):
+```bash
+cat AGENTS.md 2>/dev/null || echo "No AGENTS.md found — will work from codebase inspection."
+```
+
+**3. Check for prior spec:**
+```bash
+ls projects/{{project}}/spec.md 2>/dev/null && cat projects/{{project}}/spec.md
+```
+
+If a prior spec exists, this is a revision. Understand what changed in the PRD.
+
+**4. Assess technical scope:**
+- What new systems or components are needed?
+- What existing systems are affected?
+- What are the highest-risk technical decisions?
+- What are the data model implications?
+
+**Exit criteria:** You understand the PRD and have a mental model of the
+technical scope. You know which parts of the codebase are affected.
+"""
+
+[[steps]]
+id = "analyze-codebase"
+needs = ["read-prd"]
+title = "Analyze the codebase for conventions and constraints"
+description = """
+Before designing, understand the existing system deeply enough to
+make your spec coherent with the codebase.
+
+**1. Identify the technology stack:**
+```bash
+# Look for language/framework indicators
+ls *.toml *.json *.mod go.sum package.json Cargo.toml 2>/dev/null | head -20
+cat AGENTS.md 2>/dev/null | grep -A 5 "stack\\|tech\\|language" || true
+```
+
+**2. Find existing patterns relevant to this feature:**
+```bash
+# Search for related code areas
+grep -r "{{project}}" --include="*.go" --include="*.ts" --include="*.py" -l 2>/dev/null | head -10
+```
+
+**3. Identify integration points:**
+- What existing APIs, queues, or databases does this feature touch?
+- What existing authentication/authorization patterns apply?
+- Are there existing test harnesses to extend?
+
+**4. Note constraints from the codebase:**
+- Does the existing architecture constrain our options?
+- Are there performance baselines we must maintain?
+- Are there existing interfaces we must extend (not replace)?
+
+**Exit criteria:** You understand the existing patterns well enough to
+design a coherent spec that fits the codebase.
+"""
+
+[[steps]]
+id = "draft-spec"
+needs = ["analyze-codebase"]
+title = "Write the technical specification"
+description = """
+Write a concrete technical specification that polecats can implement from
+without ambiguity.
+
+**Create `projects/{{project}}/spec.md`** with this structure:
+
+```markdown
+# Technical Spec: {{project}}
+
+_PRD: projects/{{project}}/prd.md_
+_Status: draft — {{date}}_
+
+## Architecture Overview
+(How does this feature fit into the system? A diagram or component map.)
+
+## Data Model
+(New tables, schemas, or data structures. Include field names and types.
+Include migration strategy for schema changes.)
+
+## API / Interface Design
+(New endpoints, CLI commands, or message types. Include request/response shapes.
+Include error cases and their status codes.)
+
+## Component Design
+(New files/packages to create. Modifications to existing files.
+For each component: responsibility, interface, dependencies.)
+
+## Implementation Phases
+(Ordered list of phases. Each phase must be independently shippable.
+Format: Phase N — Title
+- Task: description [acceptance criteria])
+
+## Testing Strategy
+(Unit tests: what to cover. Integration tests: what scenarios.
+How do we verify each acceptance criterion?)
+
+## Operational Considerations
+(Deployment steps. Feature flags if needed. Monitoring/alerting.
+Rollback plan if something goes wrong.)
+
+## Open Questions / Risks
+(Technical unknowns that could affect the design. Spike tasks if needed.)
+```
+
+**Design principles:**
+- Every Phase must be independently deployable (no half-baked phases).
+- Every task in a Phase must have clear acceptance criteria.
+- No hand-waving: "implement the auth module" is not a task.
+  "Implement `POST /auth/token` returning JWT on success, 401 on bad creds" is.
+- Implementation Phases must be sequenced correctly — later phases depend on earlier.
+
+**Exit criteria:** `projects/{{project}}/spec.md` exists and covers all sections.
+"""
+
+[[steps]]
+id = "spec-self-review"
+needs = ["draft-spec"]
+title = "Self-review the technical spec"
+description = """
+Validate the spec before it goes to task decomposition.
+
+**1. Read the spec:**
+```bash
+cat projects/{{project}}/spec.md
+```
+
+**2. Cross-check against the PRD:**
+```bash
+cat projects/{{project}}/prd.md
+```
+
+For each Goal in the PRD: is there a Phase or Task that achieves it?
+For each Non-Goal: does the spec stay within scope?
+For each Constraint: does the spec respect it?
+For each Open Question: is it resolved or explicitly deferred with a spike task?
+
+**3. Check the Implementation Phases:**
+- Can Phase 1 ship without Phase 2? (Independent shippability)
+- Does each task have acceptance criteria?
+- Is the sequencing correct? (No circular dependencies between phases)
+- Is the scope achievable? (Not trying to boil the ocean in one sprint)
+
+**4. Check for design smells:**
+| Smell | Fix |
+|-------|-----|
+| "TBD" in core sections | Fill it in or add an explicit spike task |
+| Phase with >5 tasks | Split it |
+| Task with no acceptance criteria | Add criteria |
+| Missing error handling in API design | Add error cases |
+| Missing rollback in operational section | Add rollback procedure |
+
+**5. Fix all issues found.**
+
+**Exit criteria:** Spec passes cross-check against PRD. All phases have clear
+acceptance criteria. Grade B or better on completeness.
+"""
+
+[[steps]]
+id = "persist-spec"
+needs = ["spec-self-review"]
+title = "Commit the spec and signal downstream"
+description = """
+Commit the spec to git and signal that task decomposition can begin.
+
+**1. Stage and commit:**
+```bash
+git add projects/{{project}}/spec.md
+git commit -m "docs: add technical spec for {{project}} ({{issue}})"
+```
+
+**2. Update the tracking bead:**
+```bash
+bd update {{issue}} --notes "Spec complete: projects/{{project}}/spec.md"
+```
+
+**3. Verify the commit:**
+```bash
+git show --stat HEAD
+```
+
+**Exit criteria:** Spec is committed. Bead notes updated.
+"""
+
+[vars]
+[vars.project]
+description = "Project slug — must match the directory created during prd-draft"
+required = true
+
+[vars.issue]
+description = "Tracking bead ID for this project"
+required = false
+default = ""
+
+[vars.context]
+description = "Additional technical context: constraints, related PRs, architecture docs"
+required = false
+default = ""

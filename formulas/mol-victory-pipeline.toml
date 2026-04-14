@@ -1,0 +1,351 @@
+description = """
+Full Victory pipeline from project brief to shipped feature.
+
+Orchestrates the complete delivery lifecycle: PRD drafting → spec → task
+decomposition → build cycles → review gate → done. Each stage uses a
+focused sub-formula. The pipeline loops on build cycles until all tasks
+are complete, then runs the review gate, loops on fix cycles if needed,
+and advances to done when the gate passes.
+
+## Pipeline Shape
+
+```
+init ─► prd-draft ─► spec-draft ─► task-decompose ─► build-cycle
+                                                           │
+        ┌──────────────────────────────────────────────────┘
+        │   (loop until all tasks merged)
+        ▼
+    review-gate ─► gate-pass? ─► done
+          │
+          └─► gate-fail? ─► build-cycle (fix findings) ─► review-gate (loop)
+```
+
+## When to Use This Formula
+
+Use `mol-victory-pipeline` for new features and significant changes where
+you want the full planning + review lifecycle. For small, well-defined tasks
+(bug fixes, docs updates), dispatch directly to a polecat via `gt sling`.
+
+## Inputs
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| brief | yes | Project brief (raw natural language description) |
+| project | yes | Short slug for this project (e.g., "auth-v2") |
+| context | no | Additional context: constraints, prior decisions, linked beads |
+| max_parallel | no | Max parallel polecats per build cycle (default: 4) |
+
+## Outputs
+
+- `projects/{{project}}/prd.md` — Approved PRD
+- `projects/{{project}}/spec.md` — Technical specification
+- `projects/{{project}}/reviews/` — Consultant review reports
+- Committed feature code on `main` (via Refinery merge queue)
+- All project beads closed
+"""
+formula = "mol-victory-pipeline"
+type = "workflow"
+version = 1
+
+[[steps]]
+id = "init"
+title = "Initialize pipeline for project"
+description = """
+Set up tracking state for this pipeline run.
+
+**1. Create the project directory:**
+```bash
+mkdir -p projects/{{project}}/reviews
+```
+
+**2. Create a tracking epic bead for this project:**
+```bash
+bd create --title="[pipeline] {{project}}" --type=epic \
+  --description="
+Victory pipeline run for: {{project}}
+
+Brief: {{brief}}
+
+## Artifacts
+- PRD: projects/{{project}}/prd.md
+- Spec: projects/{{project}}/spec.md
+- Reviews: projects/{{project}}/reviews/
+" --label "project:{{project}},pipeline"
+```
+
+Note the epic bead ID — this is `{{issue}}` for all downstream steps.
+
+**3. Record the start:**
+```bash
+bd update <epic-id> --notes "Pipeline started. Brief: {{brief}}"
+```
+
+**4. Print pipeline start confirmation:**
+```
+Victory Pipeline Starting: {{project}}
+
+Brief: {{brief}}
+Epic: <bead-id>
+
+Stages: init → prd-draft → spec-draft → task-decompose → build-cycle → review-gate → done
+```
+
+**Exit criteria:** Project directory created. Epic bead created and ID noted.
+"""
+
+[[steps]]
+id = "prd-draft"
+needs = ["init"]
+title = "Draft the Product Requirements Document"
+description = """
+Run the mol-prd-draft formula to produce a structured PRD.
+
+**Pour the prd-draft formula:**
+```bash
+gt formula run mol-prd-draft \
+  --var brief="{{brief}}" \
+  --var project="{{project}}" \
+  --var context="{{context}}" \
+  --var issue=<epic-id>
+```
+
+This formula runs through:
+1. understand-brief — read the brief and check for prior PRD
+2. draft-prd — write structured PRD to `projects/{{project}}/prd.md`
+3. prd-self-review — validate against quality rubric
+4. persist-prd — commit PRD and update bead
+
+**Await completion:**
+The formula runs synchronously. When it completes, confirm the PRD exists:
+```bash
+cat projects/{{project}}/prd.md
+```
+
+**Human review gate (optional but recommended):**
+If this is a significant project, surface the PRD to the human:
+```
+PRD Draft Complete: {{project}}
+File: projects/{{project}}/prd.md
+
+Please review. Key open questions from the PRD:
+<paste Open Questions section>
+
+Reply to proceed or request revisions.
+```
+
+If revisions requested, re-run mol-prd-draft with updated brief.
+If no human gate configured (autonomous mode), proceed immediately.
+
+**Exit criteria:** `projects/{{project}}/prd.md` exists and is committed.
+"""
+
+[[steps]]
+id = "spec-draft"
+needs = ["prd-draft"]
+title = "Draft the technical specification"
+description = """
+Run the mol-spec-draft formula to produce a concrete technical spec.
+
+**Pour the spec-draft formula:**
+```bash
+gt formula run mol-spec-draft \
+  --var project="{{project}}" \
+  --var context="{{context}}" \
+  --var issue=<epic-id>
+```
+
+This formula runs through:
+1. read-prd — load the PRD and check for prior spec
+2. analyze-codebase — understand existing patterns and constraints
+3. draft-spec — write technical spec to `projects/{{project}}/spec.md`
+4. spec-self-review — cross-check spec against PRD
+5. persist-spec — commit spec and update bead
+
+**Await completion:**
+When it completes, confirm the spec exists:
+```bash
+cat projects/{{project}}/spec.md
+```
+
+**Exit criteria:** `projects/{{project}}/spec.md` exists, is committed,
+and all PRD goals have corresponding spec phases.
+"""
+
+[[steps]]
+id = "task-decompose"
+needs = ["spec-draft"]
+title = "Decompose spec into beads"
+description = """
+Run the mol-task-decompose formula to convert the spec into wired beads.
+
+**Pour the task-decompose formula:**
+```bash
+gt formula run mol-task-decompose \
+  --var project="{{project}}" \
+  --var issue=<epic-id>
+```
+
+This formula runs through:
+1. read-spec — load the spec and understand the phase structure
+2. create-beads — create a bead for every spec task
+3. wire-dependencies — add `bd dep add` links matching phase ordering
+4. verify-coverage — confirm every task has a bead
+
+**Await completion:**
+When done, verify the bead graph:
+```bash
+bd ready --label project:{{project}}
+bd list --label project:{{project}}
+```
+
+**Exit criteria:** All spec tasks have beads. At least one bead is `ready`.
+Dependency graph is valid.
+"""
+
+[[steps]]
+id = "build-cycle"
+needs = ["task-decompose"]
+title = "Run build cycles until all tasks are complete"
+description = """
+Run build cycles until all project beads are merged.
+
+**Pour the build-cycle formula:**
+```bash
+gt formula run mol-build-cycle \
+  --var project="{{project}}" \
+  --var issue=<epic-id> \
+  --var max_parallel="{{max_parallel}}"
+```
+
+The build cycle formula:
+1. ready-check — find unblocked ready beads
+2. dispatch-work — sling ready beads to polecats (up to `{{max_parallel}}`)
+3. monitor-progress — wait for batch to complete
+4. collect-results — record success/failure, flag failed beads
+5. advance-stage — determine: loop again, or advance to review
+
+**Loop condition:**
+If the build cycle returns with open beads remaining, run another cycle.
+Continue until `bd list --label project:{{project}} --status=open` returns nothing.
+
+**Stuck detection:**
+If two consecutive cycles produce zero merges (all dispatched work returned
+to open state), the build is stuck. Escalate:
+```bash
+gt escalate "Build stuck: {{project}} — two cycles with no merges" -s HIGH \
+  -m "Project: {{project}}
+Failed beads: $(bd list --label project:{{project}} --status=open --short)
+Last two cycles produced no merges. Please investigate."
+```
+
+**Exit criteria:** All project beads are in `closed` state. No open or
+in_progress beads remain for `project:{{project}}`.
+"""
+
+[[steps]]
+id = "review-gate"
+needs = ["build-cycle"]
+title = "Run the consultant review gate"
+description = """
+Run the mol-review-gate formula to validate the implementation.
+
+**Pour the review-gate formula:**
+```bash
+gt formula run mol-review-gate \
+  --var project="{{project}}" \
+  --var issue=<epic-id> \
+  --var branch=main
+```
+
+The review gate formula:
+1. prepare-artifacts — gather diff stats and write review brief
+2. dispatch-reviews — send UX, SRE, Quality consultants in parallel
+3. collect-reports — consolidate findings by severity
+4. create-finding-beads — create beads for all P0-P3 findings
+5. gate-decision — PASS (no P0/P1) or FAIL (dispatch fix polecats)
+
+**Gate pass → done:**
+If the gate passes, advance to the `done` step.
+
+**Gate fail → fix cycle:**
+If the gate fails, P0/P1 findings are dispatched as new beads.
+The pipeline runs another build cycle to fix them, then re-runs the gate.
+
+Maximum 3 gate/fix iterations before escalating:
+```bash
+gt escalate "Review gate loop: {{project}} — 3 gate attempts failed" -s HIGH \
+  -m "Three review gate attempts have failed for {{project}}.
+Remaining P0/P1 findings: $(bd list --label project:{{project}},review-gate --short)
+Human intervention required."
+```
+
+**Exit criteria:** Gate has PASSED. No P0 or P1 findings remain open.
+"""
+
+[[steps]]
+id = "done"
+needs = ["review-gate"]
+title = "Close the pipeline and celebrate"
+description = """
+The project is complete. All tasks merged. All review findings addressed.
+
+**1. Verify final state:**
+```bash
+bd list --label project:{{project}} --status=open
+```
+Should return nothing (all closed).
+
+**2. Close the epic:**
+```bash
+bd close <epic-id> --reason "Pipeline complete: all tasks merged, review gate passed."
+```
+
+**3. Write final summary:**
+```bash
+bd update <epic-id> --notes "
+Pipeline complete: {{project}}
+
+Delivered:
+- PRD: projects/{{project}}/prd.md
+- Spec: projects/{{project}}/spec.md
+- Reviews: projects/{{project}}/reviews/consolidated.md
+
+All tasks merged. Review gate passed.
+"
+```
+
+**4. Print completion to conversation:**
+```
+Pipeline Complete: {{project}}
+
+All implementation tasks merged to main.
+Review gate passed (UX + SRE + Quality).
+P2/P3 improvement beads filed for follow-up.
+
+Artifacts:
+- PRD: projects/{{project}}/prd.md
+- Spec: projects/{{project}}/spec.md
+- Review: projects/{{project}}/reviews/consolidated.md
+```
+
+**Exit criteria:** Epic closed. Pipeline is done.
+"""
+
+[vars]
+[vars.brief]
+description = "Project brief — raw natural language description of what to build"
+required = true
+
+[vars.project]
+description = "Short slug for this project (e.g., 'auth-v2', 'notification-levels'). Used as directory name and bead label."
+required = true
+
+[vars.context]
+description = "Additional context: constraints, related code, prior decisions, linked beads"
+required = false
+default = ""
+
+[vars.max_parallel]
+description = "Maximum number of polecats to dispatch in parallel per build cycle"
+required = false
+default = "4"

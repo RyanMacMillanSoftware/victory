@@ -1,0 +1,201 @@
+description = """
+Task decomposition formula for the Victory pipeline.
+
+Reads the approved technical spec and converts it into a dependency-wired
+set of beads ready for dispatch to polecats. Each bead gets a title,
+description, acceptance criteria, and correct dependency links.
+
+## Inputs
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| project | pipeline vars | Project slug matching spec directory |
+| issue | pipeline vars | Parent epic bead ID to attach tasks to |
+
+## Output
+
+A set of beads in the rig's bead tracker, correctly ordered by dependency,
+with at least one bead in `open` state ready to start.
+"""
+formula = "mol-task-decompose"
+version = 1
+
+[[steps]]
+id = "read-spec"
+title = "Read the technical spec"
+description = """
+Load the spec and understand the full scope before creating beads.
+
+**1. Read the spec:**
+```bash
+cat projects/{{project}}/spec.md
+```
+
+**2. Also read the PRD for context:**
+```bash
+cat projects/{{project}}/prd.md
+```
+
+**3. Build a mental model of the phases and their dependencies:**
+
+Walk through the Implementation Phases section. For each phase, list:
+- Phase name and goal
+- Tasks within the phase
+- Which earlier phases this phase depends on
+- Estimated polecat-days of effort
+
+**4. Check if beads already exist for this project:**
+```bash
+bd list --label project:{{project}} 2>/dev/null || true
+```
+
+If beads already exist from a prior decomposition run, understand what
+was already created before creating duplicates.
+
+**Exit criteria:** You understand the spec's phase structure and dependency graph.
+"""
+
+[[steps]]
+id = "create-beads"
+needs = ["read-spec"]
+title = "Create beads for each task"
+description = """
+Convert each spec task into a bead with full context.
+
+**For each task in each Implementation Phase, create a bead:**
+
+```bash
+bd create --title="<phase>: <task title>" --type=task --description="
+## Context
+Project: {{project}}
+Phase: <phase name>
+Spec: projects/{{project}}/spec.md
+
+## What
+<task description from spec>
+
+## Acceptance Criteria
+<acceptance criteria from spec — be specific>
+
+## Notes
+<any additional technical details, file paths, patterns to follow>
+" --label "project:{{project}}"
+```
+
+**Note the IDs as you go.** You'll need them to wire dependencies.
+
+**Naming convention for bead titles:**
+- Format: `<Phase N>: <verb phrase>` (e.g., "Phase 1: Create database schema")
+- Use action verbs: Create, Implement, Add, Update, Migrate, Write, Deploy
+
+**One bead per independently reviewable unit of work.** If a task is too large
+for a single polecat in one session, split it.
+
+**Exit criteria:** All spec tasks have corresponding beads. IDs noted.
+"""
+
+[[steps]]
+id = "wire-dependencies"
+needs = ["create-beads"]
+title = "Wire bead dependencies from spec sequencing"
+description = """
+Connect beads so that the dependency graph matches the spec's phase ordering.
+
+**The dependency rule:**
+`bd dep add <blocked-bead> <blocker-bead>`
+means "blocked-bead needs blocker-bead to be done first".
+
+**Example:**
+Phase 2 tasks depend on Phase 1 tasks.
+```bash
+# Phase 2 bead <vc-xyz> needs Phase 1 bead <vc-abc> done first:
+bd dep add <vc-xyz> <vc-abc>
+```
+
+**Wire dependencies for all cross-phase relationships:**
+
+1. List all beads you created:
+```bash
+bd list --label project:{{project}} --status=open
+```
+
+2. For each Phase N task, add dependencies on the Phase N-1 tasks
+   that must complete before it can start.
+
+3. Also wire intra-phase dependencies if any tasks within the same
+   phase have ordering requirements.
+
+**Temporal language gotcha:**
+- WRONG: "Phase 1 must happen before Phase 2" → `bd dep add phase1 phase2`
+- RIGHT: "Phase 2 needs Phase 1" → `bd dep add phase2 phase1`
+Think "X needs Y", not "X comes before Y".
+
+**Exit criteria:** All cross-phase dependencies are wired. `bd blocked` shows
+a sensible topological order.
+"""
+
+[[steps]]
+id = "verify-coverage"
+needs = ["wire-dependencies"]
+title = "Verify spec coverage and dependency graph integrity"
+description = """
+Confirm every spec task has a bead and the dependency graph is correct.
+
+**1. List all created beads:**
+```bash
+bd list --label project:{{project}}
+```
+
+**2. Re-read the spec's Implementation Phases:**
+```bash
+cat projects/{{project}}/spec.md
+```
+
+Walk through every task in every phase. Verify:
+- A bead exists for each task
+- The bead description captures the acceptance criteria from the spec
+- The bead title is clear and action-oriented
+
+**3. Verify the dependency graph:**
+```bash
+bd blocked --label project:{{project}} 2>/dev/null || true
+bd ready --label project:{{project}} 2>/dev/null || true
+```
+
+- `bd ready` should show at least one bead unblocked and ready to start.
+- `bd blocked` should show the correctly ordered queue.
+
+**4. If gaps found — create missing beads and wire them.**
+
+**5. Update the parent epic with the bead list:**
+```bash
+bd update {{issue}} --notes "Tasks created for {{project}}: $(bd list --label project:{{project}} --short | tr '\n' ' ')"
+```
+
+**6. Print a summary to conversation:**
+```
+Task Decomposition Complete: {{project}}
+
+Beads created: <count>
+Ready to start: <bd ready count>
+Blocked: <bd blocked count>
+
+Phase breakdown:
+- Phase 1: <N> tasks (<bead IDs>)
+- Phase 2: <N> tasks (<bead IDs>)
+...
+```
+
+**Exit criteria:** All spec tasks have beads. Dependency graph is valid.
+At least one bead is in `ready` state. Epic updated.
+"""
+
+[vars]
+[vars.project]
+description = "Project slug — must match the directory with spec.md"
+required = true
+
+[vars.issue]
+description = "Parent epic bead ID to attach summary notes to"
+required = false
+default = ""

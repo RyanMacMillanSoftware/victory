@@ -1,0 +1,348 @@
+description = """
+Review gate formula for the Victory pipeline.
+
+Runs the three consultant reviews (UX, SRE, Quality) against the completed
+implementation. Each consultant produces a structured report with findings
+graded by severity. Blocking findings (P0/P1) create beads that gate
+merge. Non-blocking findings are filed as improvement beads.
+
+## Review Protocol
+
+```
+prepare-artifacts ─► dispatch-reviews ─► collect-reports ─► gate-decision
+```
+
+Three consultants review in parallel:
+- **UX Consultant**: Impeccable 24 anti-patterns, interface coherence, user experience
+- **SRE Consultant**: Reliability, observability, failure modes, operational readiness
+- **Quality Consultant**: Test coverage, code health, technical debt, completeness
+
+## Gate Mechanism
+
+- P0/P1 findings → blocking beads (`bd dep add` on merge bead)
+- P2/P3 findings → improvement beads (non-blocking, filed for follow-up)
+- Gate PASSES if no P0/P1 findings across all three reviews
+- Gate FAILS if any P0/P1 findings → work returned to build cycle
+
+## Inputs
+
+| Variable | Source | Description |
+|----------|--------|-------------|
+| project | pipeline vars | Project slug |
+| issue | pipeline vars | Parent epic bead ID |
+| branch | pipeline vars | Branch containing the implementation |
+"""
+formula = "mol-review-gate"
+version = 1
+
+[[steps]]
+id = "prepare-artifacts"
+title = "Prepare review artifacts"
+description = """
+Gather everything the consultants need before dispatching parallel reviews.
+
+**1. Confirm the implementation is complete:**
+```bash
+git log origin/main..{{branch}} --oneline
+git diff origin/main...{{branch}} --stat
+```
+
+**2. Read the PRD and spec:**
+```bash
+cat projects/{{project}}/prd.md
+cat projects/{{project}}/spec.md
+```
+
+**3. Build a review brief for the consultants:**
+
+Create `projects/{{project}}/review-brief.md`:
+
+```markdown
+# Review Brief: {{project}}
+
+## What Was Built
+<1-paragraph summary of the implementation from the spec>
+
+## Branch
+`{{branch}}`
+
+## Diff Stats
+<paste output of `git diff origin/main...{{branch}} --stat`>
+
+## PRD Reference
+projects/{{project}}/prd.md
+
+## Spec Reference
+projects/{{project}}/spec.md
+
+## Key Implementation Decisions
+<any non-obvious architectural or design decisions made during implementation>
+
+## Known Gaps (if any)
+<anything the implementer flagged as incomplete or deferred>
+```
+
+**Exit criteria:** `projects/{{project}}/review-brief.md` exists. Diff stats confirm
+there are commits to review.
+"""
+
+[[steps]]
+id = "dispatch-reviews"
+needs = ["prepare-artifacts"]
+title = "Dispatch all three consultant reviews in parallel"
+description = """
+Dispatch UX, SRE, and Quality consultants simultaneously.
+
+**1. Dispatch UX Consultant:**
+```bash
+gt sling --agent agents/ux-consultant.md \
+  --prompt="Review the implementation for {{project}}.
+
+Brief: projects/{{project}}/review-brief.md
+Branch: {{branch}}
+PRD: projects/{{project}}/prd.md
+Spec: projects/{{project}}/spec.md
+
+Review for UX quality using the Impeccable 24 anti-patterns.
+Check interface coherence, naming clarity, error messages, and user journey integrity.
+
+Grade each finding: P0 (must fix before merge), P1 (should fix before merge),
+P2 (improvement), P3 (nice to have).
+
+Write your report to: projects/{{project}}/reviews/ux-report.md
+Mail me when done with subject: REVIEW_DONE: ux {{project}}" \
+  --mail-back
+```
+
+**2. Dispatch SRE Consultant:**
+```bash
+gt sling --agent agents/sre-consultant.md \
+  --prompt="Review the implementation for {{project}}.
+
+Brief: projects/{{project}}/review-brief.md
+Branch: {{branch}}
+PRD: projects/{{project}}/prd.md
+Spec: projects/{{project}}/spec.md
+
+Review for operational readiness: failure modes, error handling, timeouts,
+observability (logging, metrics, tracing), resource usage, and disaster recovery.
+
+Grade each finding: P0 (must fix before merge), P1 (should fix before merge),
+P2 (improvement), P3 (nice to have).
+
+Write your report to: projects/{{project}}/reviews/sre-report.md
+Mail me when done with subject: REVIEW_DONE: sre {{project}}" \
+  --mail-back
+```
+
+**3. Dispatch Quality Consultant:**
+```bash
+gt sling --agent agents/quality-consultant.md \
+  --prompt="Review the implementation for {{project}}.
+
+Brief: projects/{{project}}/review-brief.md
+Branch: {{branch}}
+PRD: projects/{{project}}/prd.md
+Spec: projects/{{project}}/spec.md
+
+Review for quality: test coverage gaps, code health, technical debt introduced,
+completeness against spec acceptance criteria, and regression risk.
+
+Grade each finding: P0 (must fix before merge), P1 (should fix before merge),
+P2 (improvement), P3 (nice to have).
+
+Write your report to: projects/{{project}}/reviews/quality-report.md
+Mail me when done with subject: REVIEW_DONE: quality {{project}}" \
+  --mail-back
+```
+
+**4. Wait for all three:**
+```bash
+gt mail inbox  # wait for 3 REVIEW_DONE messages
+```
+
+All three reviews run in parallel. Await all three before proceeding.
+
+**Exit criteria:** Three REVIEW_DONE mail messages received. Report files exist.
+"""
+
+[[steps]]
+id = "collect-reports"
+needs = ["dispatch-reviews"]
+title = "Read and consolidate review reports"
+description = """
+Read all three consultant reports and build a consolidated finding list.
+
+**1. Read all three reports:**
+```bash
+cat projects/{{project}}/reviews/ux-report.md
+cat projects/{{project}}/reviews/sre-report.md
+cat projects/{{project}}/reviews/quality-report.md
+```
+
+**2. Build a consolidated finding list:**
+
+Create `projects/{{project}}/reviews/consolidated.md`:
+
+```markdown
+# Consolidated Review: {{project}}
+
+## P0 Findings (MUST FIX — blocks merge)
+<list all P0 findings across all three reviewers>
+- [UX] <finding>
+- [SRE] <finding>
+- [Quality] <finding>
+
+## P1 Findings (SHOULD FIX — blocks merge unless deferred with justification)
+<list all P1 findings>
+
+## P2 Findings (Improvement — non-blocking, file as beads)
+<list all P2 findings>
+
+## P3 Findings (Nice to have — non-blocking, file as beads)
+<list all P3 findings>
+
+## Summary
+- UX: <N0> P0, <N1> P1, <N2> P2, <N3> P3
+- SRE: <N0> P0, <N1> P1, <N2> P2, <N3> P3
+- Quality: <N0> P0, <N1> P1, <N2> P2, <N3> P3
+- **GATE STATUS: PASS | FAIL**
+  (FAIL if any P0 or P1 exists)
+```
+
+**Exit criteria:** Consolidated report written. Gate status determined.
+"""
+
+[[steps]]
+id = "create-finding-beads"
+needs = ["collect-reports"]
+title = "Create beads for all findings"
+description = """
+Convert every finding into a bead. P0/P1 findings block merge; P2/P3 are filed
+for follow-up.
+
+**1. For each P0 finding:**
+```bash
+bd create --title="[P0] <finding title>" --type=bug --priority=0 \
+  --description="
+## Review Finding (P0 — blocks merge)
+Reviewer: <UX|SRE|Quality>
+Project: {{project}}
+
+## Finding
+<detailed description from review report>
+
+## Required Fix
+<what must change before this merges>
+
+## Acceptance Criteria
+<how we verify this is fixed>
+" --label "project:{{project}},review-gate,p0"
+```
+
+**2. For each P1 finding:**
+Same as P0 but `--priority=1` and label `p1`. Also blocks merge.
+
+**3. Wire P0/P1 beads to block the project epic:**
+```bash
+# Each P0/P1 bead must be resolved before the project advances
+bd dep add {{issue}} <p0-bead-id>
+bd dep add {{issue}} <p1-bead-id>
+```
+
+**4. For each P2 finding:**
+```bash
+bd create --title="[P2] <finding title>" --type=task --priority=2 \
+  --description="
+## Review Finding (P2 — non-blocking)
+Reviewer: <UX|SRE|Quality>
+Project: {{project}}
+
+## Finding
+<description>
+
+## Suggested Improvement
+<what could be done>
+" --label "project:{{project}},review-gate,p2,follow-up"
+```
+P2/P3 beads do NOT block merge.
+
+**5. For P3 findings:** Same as P2 but `--priority=3`.
+
+**Exit criteria:** All findings have beads. P0/P1 beads are wired to block
+the project epic. P2/P3 beads are filed for follow-up.
+"""
+
+[[steps]]
+id = "gate-decision"
+needs = ["create-finding-beads"]
+title = "Make the gate decision and notify"
+description = """
+Based on the consolidated findings, determine whether the gate passes or fails.
+
+**Read the consolidated report:**
+```bash
+cat projects/{{project}}/reviews/consolidated.md
+```
+
+---
+
+## If GATE PASSES (no P0 or P1 findings):
+
+```bash
+bd update {{issue}} --notes "Review gate PASSED. No P0/P1 findings.
+P2/P3 filed for follow-up: <bead IDs>
+Advancing to done."
+```
+
+**Signal the pipeline to advance to done.**
+
+---
+
+## If GATE FAILS (P0 or P1 findings exist):
+
+```bash
+bd update {{issue}} --notes "Review gate FAILED.
+P0 findings: <count> (<bead IDs>)
+P1 findings: <count> (<bead IDs>)
+Returning to build cycle to fix findings."
+```
+
+**Dispatch polecats to fix P0 and P1 findings:**
+```bash
+# Each P0/P1 bead is already in open state — dispatch to polecats
+gt sling <p0-bead-id>
+gt sling <p1-bead-id>
+```
+
+**Signal the pipeline to run another build cycle (for the fix work), then
+re-run the review gate after the fixes are merged.**
+
+---
+
+**Print gate summary to conversation:**
+```
+Review Gate: {{project}}
+Status: PASS | FAIL
+P0: <count> | P1: <count> | P2: <count> | P3: <count>
+
+<If PASS>: Advancing to done.
+<If FAIL>: <count> blocking findings dispatched to polecats.
+```
+
+**Exit criteria:** Gate decision made. Pipeline advanced or fix cycle triggered.
+"""
+
+[vars]
+[vars.project]
+description = "Project slug — must match the label on all project beads"
+required = true
+
+[vars.issue]
+description = "Parent epic bead ID for progress tracking and dependency wiring"
+required = true
+
+[vars.branch]
+description = "Branch containing the implementation to review (e.g., polecat/feature-xyz)"
+required = false
+default = "main"
