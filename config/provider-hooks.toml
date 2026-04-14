@@ -1,0 +1,35 @@
+# provider-hooks.toml — Gas City provider hook configuration
+#
+# Declares the Claude Code PreToolUse hooks that Gas City provides to all
+# polecat agents in the victory rig. When gt deploys a new agent worktree,
+# these hooks must be present in the agent's ~/.claude/settings.json.
+#
+# RTK token compression transparently rewrites CLI commands to use the rtk
+# proxy, yielding 60-90% token savings on common dev operations (git, find,
+# cat, grep, docker, etc.) with zero changes to agent behaviour.
+
+[provider]
+name       = "gas-city"
+version    = 1
+applies_to = ["polecat", "witness", "refinery", "mayor"]
+
+# --- PreToolUse hooks ---
+# Each entry maps to one element of the settings.json "PreToolUse" array.
+
+[[hooks.pre_tool_use]]
+name        = "rtk-token-compression"
+matcher     = "Bash"
+type        = "command"
+command     = "~/.claude/hooks/rtk-rewrite.sh"
+description = "RTK: rewrites CLI commands to token-optimised equivalents (60-90% savings)"
+required    = true
+
+# Setup verification — run after deploying a new agent to confirm the hook
+# is active and functional:
+#
+#   rtk init -g --show          # Confirm global install
+#   rtk gain                    # Show token savings history
+
+[verify]
+command     = "rtk init -g --show"
+success_pat = "settings.json: RTK hook configured"

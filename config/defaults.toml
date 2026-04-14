@@ -39,3 +39,13 @@ prefer_nudge = true
 # Escalation targets
 witness = "victory/witness"
 mayor = "mayor"
+
+[rtk]
+# RTK token compression — reduces CLI output sent to the LLM context window.
+# Configured via rtk init -g; hook definition lives in config/provider-hooks.toml.
+enabled             = true
+global_hooks        = true
+provider_hooks_file = "config/provider-hooks.toml"
+hook_script         = "~/.claude/hooks/rtk-rewrite.sh"
+# Minimum rtk version required for the hook to function correctly
+min_version         = "0.23.0"
