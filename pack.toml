@@ -20,6 +20,7 @@ schemas = "schemas/"
 scripts = "scripts/"
 
 [pack.defaults]
-config = "config/defaults.toml"
-model_routing = "config/model-routing.toml"
-safety_rails = "config/safety-rails.toml"
+config          = "config/defaults.toml"
+model_routing   = "config/model-routing.toml"
+safety_rails    = "config/safety-rails.toml"
+provider_hooks  = "config/provider-hooks.toml"

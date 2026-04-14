@@ -39,3 +39,24 @@ prefer_nudge = true
 # Escalation targets
 witness = "victory/witness"
 mayor = "mayor"
+
+[rtk]
+# RTK (Rust Token Killer) — token compression for CLI output.
+# Rewrites Bash commands to rtk equivalents, saving 60–90% of context on
+# dev operations (git status, grep, find, ls, etc.).
+#
+# Global install (run once per machine):
+#   rtk init -g
+#
+# Verify installation:
+#   rtk init --show
+#
+# Provider hook config (Gas City / Claude Code PreToolUse):
+#   config/provider-hooks.toml
+#
+# The PreToolUse hook intercepts all Bash tool calls and delegates rewrite
+# logic to `rtk rewrite`. See provider-hooks.toml for exit-code protocol.
+enabled        = true
+min_version    = "0.23.0"
+hook_script    = "~/.claude/hooks/rtk-rewrite.sh"
+provider_hooks = "config/provider-hooks.toml"

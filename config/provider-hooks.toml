@@ -1,0 +1,35 @@
+# provider-hooks.toml — Gas City (Claude Code) provider hook configuration
+#
+# Defines the hook configuration for the Claude Code (Gas City) AI provider.
+# These hooks are applied at agent startup to enable token compression via RTK.
+#
+# Prerequisite: RTK must be globally installed.
+#   Run once: rtk init -g
+#   Verify:   rtk init --show
+
+[provider]
+name        = "gas-city"
+description = "Claude Code hook configuration for the Victory rig"
+version     = "1"
+
+# PreToolUse hooks run before each tool call.
+# RTK intercepts Bash commands and rewrites them to token-efficient equivalents,
+# saving 60–90% of context on dev operations (git, grep, find, etc.).
+[[hooks.pre_tool_use]]
+name        = "rtk-compression"
+matcher     = "Bash"
+type        = "command"
+command     = "~/.claude/hooks/rtk-rewrite.sh"
+description = "RTK token compression — rewrites CLI commands to rtk equivalents"
+required    = true
+
+# How RTK rewrite exit codes map to Claude Code hook behaviour:
+#   0  → rewrite found, auto-allow (token-optimized command replaces original)
+#   1  → no RTK equivalent, pass through unchanged
+#   2  → deny rule matched, pass through (Claude Code native deny handles it)
+#   3  → ask rule matched, rewrite but prompt user for confirmation
+[hooks.pre_tool_use.rtk-compression.protocol]
+exit_0 = "rewrite + auto-allow"
+exit_1 = "passthrough"
+exit_2 = "passthrough (native deny)"
+exit_3 = "rewrite + ask"
