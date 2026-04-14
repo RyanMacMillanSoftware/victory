@@ -50,3 +50,11 @@ implementation = "medium"
 architecture = "deep"
 debugging = "deep"
 research = "deep"
+
+# Complexity heuristic thresholds
+# If files_changed > file_threshold OR deps_count > dep_threshold, escalate to deep tier
+
+[routing.complexity]
+file_threshold = 5
+dep_threshold = 3
+escalate_to = "deep"
