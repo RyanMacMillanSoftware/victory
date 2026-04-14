@@ -1,10 +1,13 @@
 import { Hono } from 'hono'
 import { serveStatic } from 'hono/bun'
 import { layout } from './views/layout.js'
+import { apiRoutes } from './routes/api.js'
+import { startPoller } from './db/poller.js'
 
 const app = new Hono()
 
 app.use('/public/*', serveStatic({ root: './' }))
+app.route('/api', apiRoutes)
 
 app.get('/', (c) => {
   return c.html(
@@ -38,4 +41,5 @@ export default {
   fetch: app.fetch,
 }
 
+startPoller()
 console.log(`Victory dashboard listening on http://localhost:${PORT}`)
