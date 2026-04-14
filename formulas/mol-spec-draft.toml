@@ -1,0 +1,221 @@
+formula = "mol-spec-draft"
+version = 1
+description = """
+Draft a technical specification from an approved PRD.
+
+Reads an existing PRD and produces a technical spec covering architecture,
+data model, API surface, implementation plan, and test strategy. The spec
+is the artifact that enables task decomposition into concrete beads.
+
+## Pipeline Position
+
+```
+prd.md → [mol-spec-draft] → spec.md → [mol-task-decompose] → beads
+```
+
+## Output
+
+Writes to `.victory/spec-{{slug}}.md` in the project repo.
+
+## Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| slug     | yes      | Project identifier matching the PRD slug |
+| issue    | yes      | The bead ID for this work |
+| prd_path | no       | Path to PRD file (default: .victory/prd-{{slug}}.md) |
+"""
+
+[vars.slug]
+description = "Project identifier matching the PRD slug"
+required = true
+
+[vars.issue]
+description = "The bead ID assigned for this spec work"
+required = true
+
+[vars.prd_path]
+description = "Path to the PRD file"
+default = ".victory/prd-{{slug}}.md"
+
+[[steps]]
+id = "read-prd"
+title = "Read and internalize the PRD"
+description = """
+Load the PRD and understand the requirements before writing the spec.
+
+**1. Read the PRD:**
+```bash
+cat {{prd_path}}
+```
+
+If `{{prd_path}}` doesn't exist:
+```bash
+ls .victory/
+# Find the right PRD file
+```
+
+**2. Identify the technical surface area:**
+Think through:
+- What data needs to be stored? (data model)
+- What interfaces need to be built? (API / CLI / UI)
+- What existing code will change? (impact analysis)
+- What new infrastructure is needed?
+- What are the hard technical problems?
+
+**3. Check existing codebase:**
+```bash
+# Get an overview of the codebase structure
+ls -la
+# Look for related existing code
+find . -name "*.go" -o -name "*.ts" -o -name "*.py" 2>/dev/null | head -30
+```
+
+**Exit criteria:** You understand the PRD and have mapped it to the technical space.
+"""
+
+[[steps]]
+id = "draft-spec"
+title = "Write the technical specification"
+needs = ["read-prd"]
+description = """
+Write a technical specification to `.victory/spec-{{slug}}.md`.
+
+**1. Create output directory if needed:**
+```bash
+mkdir -p .victory
+```
+
+**2. Write the spec with this structure:**
+
+```markdown
+# Technical Spec: <feature name>
+
+**Slug:** {{slug}}
+**Status:** draft
+**Date:** <today>
+**PRD:** {{prd_path}}
+
+## Overview
+(2-3 sentences: what we're building and why)
+
+## Architecture
+(High-level design: which components change, how they interact)
+
+### Components Affected
+- Component 1: what changes
+- Component 2: what changes
+
+### New Components
+- New component: what it does
+
+## Data Model
+(Schema changes, new tables/fields, migration strategy)
+
+### New/Modified Schemas
+```
+// describe schema changes here
+```
+
+### Migration
+(How do we migrate existing data? Is it backwards-compatible?)
+
+## API / Interface Design
+(New endpoints, CLI commands, function signatures, events)
+
+### New Interfaces
+- `endpoint / function`: description, inputs, outputs
+
+### Modified Interfaces
+- `endpoint / function`: what changes and why
+
+## Implementation Plan
+(Ordered list of concrete implementation steps)
+
+1. Step 1: what to build first (why this order)
+2. Step 2: depends on step 1
+3. Step 3: ...
+
+## Test Strategy
+(How do we verify this is correct?)
+
+### Unit Tests
+- What to unit test and why
+
+### Integration Tests
+- What integration scenarios to cover
+
+### Manual Verification
+- [ ] Scenario 1: how to test it manually
+
+## Open Technical Questions
+(Hard unknowns that must be resolved during implementation)
+1. Question 1
+
+## Out of Scope
+(Technical scope explicitly deferred to follow-on work)
+- Item 1
+```
+
+**3. Write the file:**
+Create `.victory/spec-{{slug}}.md` filled in based on your PRD analysis and
+codebase understanding.
+
+Be specific about interfaces. Vague specs produce ambiguous beads.
+
+**Exit criteria:** `.victory/spec-{{slug}}.md` exists and covers all spec sections.
+"""
+
+[[steps]]
+id = "self-review-spec"
+title = "Self-review spec for implementation readiness"
+needs = ["draft-spec"]
+description = """
+Review the spec to ensure a polecat could implement from it without guessing.
+
+**Read the spec:**
+```bash
+cat .victory/spec-{{slug}}.md
+```
+
+**Check each category:**
+
+| Category | Check |
+|----------|-------|
+| Architecture | Can you draw the component diagram from this? |
+| Data model | Are schema changes specific enough to write migrations? |
+| API design | Are inputs/outputs defined for each new interface? |
+| Implementation plan | Is the order clear? Are dependencies called out? |
+| Test strategy | Does every acceptance criterion from PRD have a test? |
+| Open questions | Are blockers captured (not glossed over)? |
+
+**Fix any gaps.** Do not proceed with a spec that leaves polecats guessing.
+
+**Persist spec path to bead:**
+```bash
+bd update {{issue}} --notes "Spec written: .victory/spec-{{slug}}.md"
+```
+
+**Exit criteria:** Spec is implementation-ready. Bead updated with output path.
+"""
+
+[[steps]]
+id = "commit-spec"
+title = "Commit spec to repository"
+needs = ["self-review-spec"]
+description = """
+Commit the spec so it's tracked and survives session death.
+
+**1. Stage and commit:**
+```bash
+git add .victory/spec-{{slug}}.md
+git commit -m "docs: add technical spec for {{slug}} ({{issue}})"
+```
+
+**2. Verify:**
+```bash
+git log --oneline -3
+```
+
+**Exit criteria:** Spec committed. Working tree clean.
+"""

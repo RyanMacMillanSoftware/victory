@@ -1,0 +1,197 @@
+formula = "mol-prd-draft"
+version = 1
+description = """
+Draft a Product Requirements Document (PRD) from a raw idea or problem statement.
+
+Takes a vague or structured idea and produces a concrete PRD ready for technical
+specification. The output is a markdown file with problem statement, goals,
+non-goals, user stories, constraints, and open questions.
+
+## Pipeline Position
+
+```
+[idea] → [mol-prd-draft] → prd.md → [mol-spec-draft] → ...
+```
+
+## Output
+
+Writes to `.victory/prd-{{slug}}.md` in the project repo.
+
+## Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| problem  | yes      | Raw idea or problem statement to turn into a PRD |
+| slug     | yes      | Short identifier for this project (e.g. "auth-refresh") |
+| context  | no       | Extra context: constraints, related code, prior decisions |
+| repo     | no       | Target repository (default: current repo) |
+"""
+
+[vars.problem]
+description = "Raw idea or problem statement to turn into a PRD"
+required = true
+
+[vars.slug]
+description = "Short identifier for this project (e.g. auth-refresh, dark-mode)"
+required = true
+
+[vars.context]
+description = "Additional context: constraints, related code, prior decisions"
+default = ""
+
+[vars.repo]
+description = "Target repository path (default: current working directory)"
+default = "."
+
+[[steps]]
+id = "understand-problem"
+title = "Understand the problem space"
+description = """
+Load context and understand what problem we're solving.
+
+**1. Read the problem statement:**
+The `{{problem}}` variable contains the raw idea. Read it carefully.
+
+**2. Load additional context if provided:**
+```bash
+# If {{context}} is non-empty, it contains constraints / related code
+echo "{{context}}"
+```
+
+**3. Check for related existing work:**
+```bash
+# Look for related beads or prior art
+bd list --status=open 2>/dev/null | head -20
+# Check if a PRD already exists
+ls .victory/prd-{{slug}}.md 2>/dev/null && echo "PRD exists — will update" || echo "New PRD"
+```
+
+**4. Identify key questions before drafting:**
+Write down (mentally):
+- Who is the primary user? Who else is affected?
+- What pain point is being solved?
+- What does success look like, concretely?
+- What are the hardest technical unknowns?
+- What is explicitly NOT in scope?
+
+**Exit criteria:** You understand the problem well enough to write a structured PRD.
+"""
+
+[[steps]]
+id = "draft-prd"
+title = "Write the PRD document"
+needs = ["understand-problem"]
+description = """
+Write a structured PRD to `.victory/prd-{{slug}}.md`.
+
+**1. Create output directory if needed:**
+```bash
+mkdir -p .victory
+```
+
+**2. Write the PRD with this structure:**
+
+```markdown
+# PRD: <feature name>
+
+**Slug:** {{slug}}
+**Status:** draft
+**Date:** <today>
+
+## Problem Statement
+(What problem are we solving? For whom? Why does it matter now?)
+
+## Goals
+(What does success look like — specific, measurable where possible)
+- Goal 1
+- Goal 2
+
+## Non-Goals
+(Explicitly out of scope — prevents scope creep)
+- Non-goal 1
+
+## User Stories
+(How will this be used? One story per actor/scenario)
+- As a <role>, I want to <action> so that <outcome>
+
+## Constraints
+(Technical, business, timeline, or resource constraints)
+- Constraint 1
+
+## Acceptance Criteria
+(How do we verify this is done? Testable conditions)
+- [ ] Criterion 1
+- [ ] Criterion 2
+
+## Open Questions
+(Things that must be answered before or during implementation)
+1. Question 1
+2. Question 2
+
+## Rough Approach
+(Initial thinking on how to solve this — direction, not a plan)
+```
+
+**3. Write the file:**
+Create `.victory/prd-{{slug}}.md` with the content above, filled in based on
+your understanding of `{{problem}}` and `{{context}}`.
+
+Be specific. Vague PRDs produce poor specs. If you don't know something,
+put it in Open Questions rather than guessing.
+
+**Exit criteria:** `.victory/prd-{{slug}}.md` exists and is filled out.
+"""
+
+[[steps]]
+id = "self-review-prd"
+title = "Self-review the PRD for completeness"
+needs = ["draft-prd"]
+description = """
+Review the PRD against a quality checklist before declaring it done.
+
+**Read the PRD:**
+```bash
+cat .victory/prd-{{slug}}.md
+```
+
+**Check each category:**
+
+| Category | Check |
+|----------|-------|
+| Problem clarity | Is the problem specific? Does it say who is affected? |
+| Goals | Are goals measurable or at least verifiable? |
+| Non-goals | Are at least 2-3 non-goals listed? |
+| User stories | Does each story have a role, action, and outcome? |
+| Acceptance criteria | Can QA write a test from each criterion? |
+| Open questions | Are hard unknowns captured (not glossed over)? |
+
+**Fix any gaps found.** Don't just note them — edit the PRD.
+
+**Persist the PRD path to the bead:**
+```bash
+bd update {{issue}} --notes "PRD written: .victory/prd-{{slug}}.md"
+```
+
+**Exit criteria:** PRD passes all checklist items. Bead updated with output path.
+"""
+
+[[steps]]
+id = "commit-prd"
+title = "Commit PRD to repository"
+needs = ["self-review-prd"]
+description = """
+Commit the PRD so it's tracked in version control and survives session death.
+
+**1. Stage and commit:**
+```bash
+git add .victory/prd-{{slug}}.md
+git commit -m "docs: add PRD for {{slug}} ({{issue}})"
+```
+
+**2. Verify commit:**
+```bash
+git log --oneline -3
+```
+
+**Exit criteria:** PRD committed. Working tree clean.
+"""

@@ -1,0 +1,242 @@
+formula = "mol-task-decompose"
+version = 1
+description = """
+Decompose a technical spec into a bead convoy with dependency ordering.
+
+Reads a spec and creates a set of concrete, independently-workable beads.
+Each bead is scoped to ~1 polecat session, has clear acceptance criteria,
+and has its dependencies declared so the Deacon can sequence dispatch.
+
+## Pipeline Position
+
+```
+spec.md → [mol-task-decompose] → bead convoy → [mol-build-cycle × N]
+```
+
+## Output
+
+Creates beads in the Dolt database and registers a convoy for dispatch.
+Writes a `.victory/tasks-{{slug}}.md` manifest for human review.
+
+## Decomposition Rules
+
+1. Each bead should be completable in a single polecat session (< 2h)
+2. Beads must have clear acceptance criteria (testable)
+3. Dependencies must be declared via `bd block`
+4. Infrastructure beads come before feature beads
+5. Test beads can run in parallel with implementation beads
+
+## Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| slug     | yes      | Project identifier matching the spec slug |
+| issue    | yes      | The bead ID for this decomposition work |
+| spec_path| no       | Path to spec file (default: .victory/spec-{{slug}}.md) |
+| convoy   | no       | Convoy ID to register beads in (created if not provided) |
+"""
+
+[vars.slug]
+description = "Project identifier matching the spec slug"
+required = true
+
+[vars.issue]
+description = "The bead ID assigned for this decomposition work"
+required = true
+
+[vars.spec_path]
+description = "Path to the spec file"
+default = ".victory/spec-{{slug}}.md"
+
+[vars.convoy]
+description = "Existing convoy ID to register beads in (creates new convoy if empty)"
+default = ""
+
+[[steps]]
+id = "read-spec"
+title = "Read spec and identify work units"
+description = """
+Load the spec and identify discrete, independently-workable units of implementation.
+
+**1. Read the spec:**
+```bash
+cat {{spec_path}}
+```
+
+**2. Extract implementation steps:**
+The spec's "Implementation Plan" section lists ordered steps. Map each step to a bead:
+- One implementation step = one bead (unless it's tiny, then combine; huge, then split)
+- Each bead must be completable in a single session
+- Each bead must have a clear "done" state
+
+**3. Identify dependency relationships:**
+Draw (mentally) the dependency graph:
+- Which beads can run in parallel?
+- Which must complete before others can start?
+- Infrastructure vs. feature vs. test beads
+
+**4. Estimate bead count:**
+A typical feature has 4-8 beads. If you're over 10, consider splitting the spec.
+If under 3, consider whether this should be a single bead.
+
+**Exit criteria:** You have a clear mental model of the bead breakdown and deps.
+"""
+
+[[steps]]
+id = "create-beads"
+title = "Create beads for each work unit"
+needs = ["read-spec"]
+description = """
+Create one bead per work unit with clear titles and descriptions.
+
+**For each work unit identified in the previous step:**
+
+```bash
+bd create \
+  --title "<type>: <specific description>" \
+  --type task \
+  --priority 2 \
+  --body "## What
+
+<1-2 sentences: what to implement>
+
+## Why
+
+<why this matters / what it unblocks>
+
+## Acceptance Criteria
+- [ ] Criterion 1
+- [ ] Criterion 2
+
+## Files Likely Affected
+- file/path.go
+- other/file.ts
+
+## Notes
+<any implementation hints from the spec>"
+```
+
+Bead title format: `[slug] <verb>: <noun>` (e.g., `[auth] implement: JWT validation middleware`)
+
+**Record all created bead IDs.** You need them for dependency setup.
+
+**Exit criteria:** All work units have beads. Record bead IDs in a local list.
+"""
+
+[[steps]]
+id = "declare-dependencies"
+title = "Declare bead dependency ordering"
+needs = ["create-beads"]
+description = """
+Wire up dependencies so the Deacon dispatches beads in the right order.
+
+**For each bead that depends on another:**
+
+```bash
+# Mark bead B as blocked by bead A (B cannot start until A is closed)
+bd block <bead-B-id> --by <bead-A-id>
+```
+
+**Example dependency chain:**
+```
+vc-xxx (create DB schema)
+  └─ vc-yyy (implement repository layer)  [blocked by vc-xxx]
+       └─ vc-zzz (implement API handler)  [blocked by vc-yyy]
+vc-aaa (write integration tests)          [blocked by vc-yyy, vc-zzz]
+```
+
+**Verify the dependency graph:**
+```bash
+bd list --status=open | grep -E "vc-"
+# Review that blocked beads show correctly
+```
+
+**Exit criteria:** All cross-bead dependencies are declared. No orphan beads.
+"""
+
+[[steps]]
+id = "create-convoy"
+title = "Register convoy for dispatch"
+needs = ["declare-dependencies"]
+description = """
+Create or update a convoy to group these beads for coordinated dispatch.
+
+**If a convoy ID was provided in `{{convoy}}`:**
+```bash
+gt convoy add {{convoy}} <bead-id-1> <bead-id-2> ...
+```
+
+**If no convoy exists yet, create one:**
+```bash
+gt convoy create \
+  --name "{{slug}}" \
+  --description "Delivery convoy for {{slug}} feature" \
+  --beads <bead-id-1>,<bead-id-2>,...
+```
+
+Record the convoy ID.
+
+**Verify convoy status:**
+```bash
+gt convoy status <convoy-id>
+```
+
+**Exit criteria:** Convoy exists with all beads registered.
+"""
+
+[[steps]]
+id = "write-tasks-manifest"
+title = "Write tasks manifest for human review"
+needs = ["create-convoy"]
+description = """
+Write a human-readable task manifest for review before dispatch.
+
+**Create `.victory/tasks-{{slug}}.md`:**
+
+```markdown
+# Tasks: {{slug}}
+
+**Convoy:** <convoy-id>
+**Total beads:** <count>
+**Date:** <today>
+**Spec:** {{spec_path}}
+
+## Bead Breakdown
+
+| Bead ID | Title | Depends On | Priority |
+|---------|-------|------------|----------|
+| vc-xxx  | [slug] implement: DB schema | — | P2 |
+| vc-yyy  | [slug] implement: repo layer | vc-xxx | P2 |
+| vc-zzz  | [slug] implement: API handler | vc-yyy | P2 |
+| vc-aaa  | [slug] test: integration tests | vc-yyy, vc-zzz | P2 |
+
+## Dependency Graph
+
+```
+vc-xxx → vc-yyy → vc-zzz → vc-aaa
+```
+
+## Dispatch Order
+
+Round 1 (no deps): vc-xxx
+Round 2 (after vc-xxx): vc-yyy
+Round 3 (after vc-yyy): vc-zzz
+Round 4 (after vc-yyy + vc-zzz): vc-aaa
+
+## Next Steps
+
+Review and then dispatch with:
+\`\`\`bash
+gt convoy dispatch <convoy-id>
+\`\`\`
+```
+
+**Persist manifest path to bead:**
+```bash
+bd update {{issue}} --notes "Tasks manifest: .victory/tasks-{{slug}}.md — convoy: <convoy-id>"
+git add .victory/tasks-{{slug}}.md
+git commit -m "docs: add task decomposition manifest for {{slug}} ({{issue}})"
+```
+
+**Exit criteria:** Manifest written and committed. Bead updated with output.
+"""
