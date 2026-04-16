@@ -55,7 +55,7 @@ app.get('/', (c) => {
   )
 })
 
-const PORT = 3456
+const PORT = Number(process.env.DASHBOARD_PORT ?? process.env.PORT ?? 3456)
 
 export default {
   port: PORT,

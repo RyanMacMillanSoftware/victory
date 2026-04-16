@@ -29,3 +29,6 @@ polecat_brief  = "prompts/polecat/brief.md"
 [pack.scripts]
 bug_warn_inject = "scripts/bug-warn-inject.sh"
 migrate         = "scripts/migrate.sh"
+install         = "scripts/install.sh"
+dashboard       = "scripts/dashboard.sh"
+smoke_test      = "scripts/smoke-test.sh"
