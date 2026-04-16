@@ -183,7 +183,7 @@ echo
 echo "--- 4. mol-review-gate formula ---"
 echo
 
-FORMULA_PATH="formulas/mol-review-gate.formula.toml"
+FORMULA_PATH="formulas/mol-review-gate.toml"
 
 assert_file_exists \
     "formula: file exists" \
