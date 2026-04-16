@@ -46,7 +46,8 @@ app.get('/', (c) => {
             <p class="empty">Loading\u2026</p>
           </div>
           <div class="panel" id="panel-bugs"
-               hx-get="/routes/bugs" hx-trigger="load" hx-swap="innerHTML">
+               hx-get="/routes/bugs" hx-trigger="load" hx-swap="innerHTML"
+               sse-swap="bugs" hx-target="#panel-bugs">
             <p class="empty">Loading\u2026</p>
           </div>
         </section>

@@ -9,15 +9,24 @@ export interface Issue {
   updated_at: string
 }
 
+export interface BugEntry {
+  id: string
+  code_area: string
+  bug_title: string
+  occurrence_count: number
+  status: string
+}
+
 export interface DashboardState {
   projects: Issue[]
   agents: Issue[]
   beads: Issue[]
   escalations: Issue[]
+  bugs: BugEntry[]
   timestamp: number
 }
 
-export type PanelKey = keyof Omit<DashboardState, 'timestamp'>
+export type PanelKey = keyof Omit<DashboardState, 'timestamp' | 'bugs'>
 
 export type ChangeEvent =
   | { op: 'added'; panel: PanelKey; item: Issue }

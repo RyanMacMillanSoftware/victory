@@ -1,11 +1,12 @@
 import { pool } from './connection.js'
 import { diffState } from '../lib/state-diff.js'
 import { broadcast, broadcastHtml } from '../lib/sse.js'
-import type { DashboardState, Issue } from '../lib/state-diff.js'
+import type { DashboardState, Issue, BugEntry } from '../lib/state-diff.js'
 import { projectsContent } from '../views/project-card.js'
 import { agentsContent } from '../views/agent-row.js'
 import { beadTable } from '../views/bead-table.js'
 import { escalationsContent } from '../views/escalation-item.js'
+import { bugsContent } from '../views/bug-card.js'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -35,8 +36,18 @@ function rowsToIssues(rows: any[]): Issue[] {
   }))
 }
 
+function rowsToBugs(rows: any[]): BugEntry[] {
+  return rows.map((r) => ({
+    id: String(r.id ?? ''),
+    code_area: String(r.code_area ?? ''),
+    bug_title: String(r.bug_title ?? ''),
+    occurrence_count: Number(r.occurrence_count ?? 1),
+    status: String(r.status ?? ''),
+  }))
+}
+
 async function fetchState(): Promise<DashboardState> {
-  const [projectRows, beadRows, escalationRows, agentRows] = await Promise.all([
+  const [projectRows, beadRows, escalationRows, agentRows, bugRows] = await Promise.all([
     // Projects: HQ issues labelled with any 'project:*' tag
     pool
       .query<any[]>(
@@ -91,6 +102,17 @@ async function fetchState(): Promise<DashboardState> {
          LIMIT 20`,
       )
       .then(([r]) => r),
+
+    // Bugs: active bug patterns from victory rig
+    pool
+      .query<any[]>(
+        `SELECT id, code_area, bug_title, occurrence_count, status
+         FROM victory.bug_memory
+         WHERE status IN ('active', 'resolved')
+         ORDER BY status ASC, occurrence_count DESC, created_at DESC
+         LIMIT 20`,
+      )
+      .then(([r]) => r),
   ])
 
   return {
@@ -98,6 +120,7 @@ async function fetchState(): Promise<DashboardState> {
     beads: rowsToIssues(beadRows),
     escalations: rowsToIssues(escalationRows),
     agents: rowsToIssues(agentRows),
+    bugs: rowsToBugs(bugRows),
     timestamp: Date.now(),
   }
 }
@@ -120,6 +143,7 @@ async function poll(): Promise<void> {
     broadcastHtml('agents', agentsContent(next.agents))
     broadcastHtml('beads', beadTable(next.beads))
     broadcastHtml('escalations', escalationsContent(next.escalations))
+    broadcastHtml('bugs', bugsContent(next.bugs))
 
     currentState = next
   } catch (err) {

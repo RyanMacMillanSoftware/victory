@@ -6,6 +6,7 @@ import { projectsContent } from '../views/project-card.js'
 import { agentsContent } from '../views/agent-row.js'
 import { beadTable } from '../views/bead-table.js'
 import { escalationsContent } from '../views/escalation-item.js'
+import { bugsContent } from '../views/bug-card.js'
 
 const api = new Hono()
 
@@ -37,7 +38,7 @@ api.get('/events', (c) => {
     // Send initial state snapshot as individual panel events
     const state = getCurrentState()
     if (state) {
-      for (const panel of ['projects', 'agents', 'beads', 'escalations'] as const) {
+      for (const panel of ['projects', 'agents', 'beads', 'escalations', 'bugs'] as const) {
         await stream.writeSSE({ event: panel, data: JSON.stringify(state[panel]) })
       }
     }
@@ -77,6 +78,7 @@ api.get('/live', (c) => {
       await stream.writeSSE({ event: 'agents', data: agentsContent(state.agents) })
       await stream.writeSSE({ event: 'beads', data: beadTable(state.beads) })
       await stream.writeSSE({ event: 'escalations', data: escalationsContent(state.escalations) })
+      await stream.writeSSE({ event: 'bugs', data: bugsContent(state.bugs) })
     }
 
     // Heartbeat to keep connection alive
