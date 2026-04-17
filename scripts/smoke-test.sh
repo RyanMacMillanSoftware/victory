@@ -399,6 +399,15 @@ else
             fi
         done
 
+        # Verify static assets load (regression: styles.css was 404 when server launched from wrong dir)
+        CSS_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 3 "http://localhost:${TEST_PORT}/public/styles.css" 2>/dev/null || echo "ERR")
+        if [[ "$CSS_CODE" == "200" ]]; then
+            ok "HTTP GET /public/styles.css → 200 OK"
+        else
+            fail "HTTP GET /public/styles.css → ${CSS_CODE} (expected 200, check serveStatic root path)"
+        fi
+
         # Verify SSE endpoints exist
         for sse_path in /api/live /api/events; do
             SSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" \

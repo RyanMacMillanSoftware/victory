@@ -13,7 +13,7 @@ import { startPoller } from './db/poller.js'
 
 const app = new Hono()
 
-app.use('/public/*', serveStatic({ root: './' }))
+app.use('/public/*', serveStatic({ root: import.meta.dir + '/..' }))
 
 app.route('/api', apiRoutes)
 app.route('/routes/projects', projectsRoutes)

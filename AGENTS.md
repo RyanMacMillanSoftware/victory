@@ -48,7 +48,7 @@ Real-time web dashboard built with Bun + Hono + HTMX + SSE.
 |---|---|
 | `install.sh` | Pack installation: dependencies, migrations, preflight checks. Run after clone or update. Flags: `--dry-run`, `--skip-migrations` |
 | `dashboard.sh` | Start the dashboard server |
-| `smoke-test.sh` | End-to-end validation (41 checks). Does not require a running Dolt server. `bash scripts/smoke-test.sh` |
+| `smoke-test.sh` | End-to-end validation (42 checks). Does not require a running Dolt server. `bash scripts/smoke-test.sh` |
 | `bug-warn-inject.sh` | Injects bug memory warnings at sling time |
 | `migrate.sh` | Dolt schema migrations |
 | `model_routing.py` / `model-routing.sh` | Model routing utilities |
@@ -91,7 +91,7 @@ The gate slots (`setup_command`, `build_command`, `test_command`, `lint_command`
 
 For Victory's own validation, run:
 ```bash
-bash scripts/smoke-test.sh   # 41 checks, all must pass
+bash scripts/smoke-test.sh   # 42 checks, all must pass
 ```
 
 ## RTK integration
@@ -114,5 +114,5 @@ bash scripts/install.sh --skip-migrations  # Skip Dolt schema setup
 
 ## Core rule
 
-Work is done when `bash scripts/smoke-test.sh` passes all 41 checks and the
+Work is done when `bash scripts/smoke-test.sh` passes all 42 checks and the
 working tree is clean with at least one commit ahead of `origin/main`.
