@@ -6,7 +6,14 @@ Victory is a Gas Town (GT) rig pack — a deployable configuration bundle for au
 
 - **Agents** — AI agent definitions for planner, researcher, quality consultant, UX consultant, and SRE consultant
 - **Formulas** — Workflow templates for the full delivery pipeline (PRD → spec → build → review)
-- **Dashboard** — Real-time Bun + HTMX + SSE web UI for monitoring bead/agent state
+- **Dashboard** — Real-time Bun + HTMX + SSE web UI (port 3456) with 7 monitoring panels:
+  - **Projects** — active and recent Chris project status
+  - **Agents** — live polecat heartbeat and context usage
+  - **Beads** — current work queue and bead status
+  - **Escalations** — unresolved alerts needing attention
+  - **Bugs** — bug memory entries with warning status
+  - **Convoys** — active convoy groups with tracked issue counts
+  - **Polecats** — live polecat state across all rigs
 - **Orders** — Scheduled patrol jobs (pipeline-check, overnight-build, stale-project-detect)
 
 ## Quick Start
