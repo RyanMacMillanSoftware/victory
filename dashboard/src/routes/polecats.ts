@@ -11,11 +11,11 @@ const STALE_MS = 3 * 60 * 1000
 
 const RIG_NAMES: Record<string, string> = {
   vc: 'victory',
-  ch: 'chrome',
-  ma: 'madmax',
-  md: 'mordecai',
-  mi: 'miller',
-  ms: 'mossad',
+  ch: 'chris',
+  ma: 'molly_api',
+  md: 'molly_android',
+  mi: 'molly_ios',
+  ms: 'molly_astro',
   hq: 'hq',
 }
 
