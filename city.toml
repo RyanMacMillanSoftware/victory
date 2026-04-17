@@ -17,7 +17,7 @@ database = "beads_victory"
 [city.agents]
 witness = "victory/witness"
 refinery = "victory/refinery"
-mayor = "mayor"
+mayor = "victory/mayor"
 
 [city.polecats]
 # Polecat slots available for dispatch
