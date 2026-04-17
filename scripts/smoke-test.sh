@@ -389,7 +389,7 @@ else
         fi
 
         # Verify all dashboard panel routes return 200
-        for route in /routes/projects /routes/agents /routes/beads /routes/escalations /routes/bugs /routes/convoys; do
+        for route in /routes/projects /routes/agents /routes/beads /routes/escalations /routes/bugs /routes/convoys /routes/polecats; do
             PANEL_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
                 --max-time 3 "http://localhost:${TEST_PORT}${route}" 2>/dev/null || echo "ERR")
             if [[ "$PANEL_CODE" == "200" ]]; then
