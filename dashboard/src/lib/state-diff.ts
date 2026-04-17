@@ -25,6 +25,15 @@ export interface ConvoyEntry {
   updated_at: string
 }
 
+export interface PolecatEntry {
+  id: string
+  name: string
+  rig: string
+  status: string
+  bead_id: string | null
+  last_seen: string
+}
+
 export interface DashboardState {
   projects: Issue[]
   agents: Issue[]
@@ -32,10 +41,11 @@ export interface DashboardState {
   escalations: Issue[]
   bugs: BugEntry[]
   convoys: ConvoyEntry[]
+  polecats: PolecatEntry[]
   timestamp: number
 }
 
-export type PanelKey = keyof Omit<DashboardState, 'timestamp' | 'bugs' | 'convoys'>
+export type PanelKey = keyof Omit<DashboardState, 'timestamp' | 'bugs' | 'convoys' | 'polecats'>
 
 export type ChangeEvent =
   | { op: 'added'; panel: PanelKey; item: Issue }

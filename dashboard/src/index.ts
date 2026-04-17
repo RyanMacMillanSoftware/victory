@@ -8,6 +8,7 @@ import { beadsRoutes } from './routes/beads.js'
 import { escalationsRoutes } from './routes/escalations.js'
 import { bugsRoutes } from './routes/bugs.js'
 import { convoysRoutes } from './routes/convoys.js'
+import { polecatsRoutes } from './routes/polecats.js'
 import { startPoller } from './db/poller.js'
 
 const app = new Hono()
@@ -21,6 +22,7 @@ app.route('/routes/beads', beadsRoutes)
 app.route('/routes/escalations', escalationsRoutes)
 app.route('/routes/bugs', bugsRoutes)
 app.route('/routes/convoys', convoysRoutes)
+app.route('/routes/polecats', polecatsRoutes)
 
 app.get('/', (c) => {
   return c.html(
@@ -55,6 +57,11 @@ app.get('/', (c) => {
           <div class="panel" id="panel-convoys"
                hx-get="/routes/convoys" hx-trigger="load" hx-swap="innerHTML"
                sse-swap="convoys" hx-target="#panel-convoys">
+            <p class="empty">Loading\u2026</p>
+          </div>
+          <div class="panel" id="panel-polecats"
+               hx-get="/routes/polecats" hx-trigger="load" hx-swap="innerHTML"
+               sse-swap="polecats" hx-target="#panel-polecats">
             <p class="empty">Loading\u2026</p>
           </div>
         </section>

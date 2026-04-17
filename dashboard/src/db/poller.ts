@@ -8,6 +8,8 @@ import { beadTable } from '../views/bead-table.js'
 import { escalationsContent } from '../views/escalation-item.js'
 import { bugsContent } from '../views/bug-card.js'
 import { convoysContent } from '../views/convoy-row.js'
+import { polecatsContent } from '../views/polecat-row.js'
+import { fetchPolecats } from '../routes/polecats.js'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -58,7 +60,7 @@ function rowsToConvoys(rows: any[]): ConvoyEntry[] {
 }
 
 async function fetchState(): Promise<DashboardState> {
-  const [projectRows, beadRows, escalationRows, agentRows, bugRows, convoyRows] = await Promise.all([
+  const [projectRows, beadRows, escalationRows, agentRows, bugRows, convoyRows, polecatEntries] = await Promise.all([
     // Projects: HQ issues labelled with any 'project:*' tag
     pool
       .query<any[]>(
@@ -139,6 +141,9 @@ async function fetchState(): Promise<DashboardState> {
          LIMIT 30`,
       )
       .then(([r]) => r),
+
+    // Polecats: read from GT runtime heartbeats
+    fetchPolecats(),
   ])
 
   return {
@@ -148,6 +153,7 @@ async function fetchState(): Promise<DashboardState> {
     agents: rowsToIssues(agentRows),
     bugs: rowsToBugs(bugRows),
     convoys: rowsToConvoys(convoyRows),
+    polecats: polecatEntries,
     timestamp: Date.now(),
   }
 }
@@ -172,6 +178,7 @@ async function poll(): Promise<void> {
     broadcastHtml('escalations', escalationsContent(next.escalations))
     broadcastHtml('bugs', bugsContent(next.bugs))
     broadcastHtml('convoys', convoysContent(next.convoys))
+    broadcastHtml('polecats', polecatsContent(next.polecats))
 
     currentState = next
   } catch (err) {
