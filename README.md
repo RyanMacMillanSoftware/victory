@@ -1,5 +1,7 @@
 # Victory
 
+[![CI](https://github.com/RyanMacMillanSoftware/victory/actions/workflows/ci.yml/badge.svg)](https://github.com/RyanMacMillanSoftware/victory/actions/workflows/ci.yml)
+
 Victory is a Gas Town (GT) rig pack — a deployable configuration bundle for autonomous code delivery CI/CD operations.
 
 ## What's Included
