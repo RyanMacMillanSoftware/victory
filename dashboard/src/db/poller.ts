@@ -1,12 +1,13 @@
 import { pool } from './connection.js'
 import { diffState } from '../lib/state-diff.js'
 import { broadcast, broadcastHtml } from '../lib/sse.js'
-import type { DashboardState, Issue, BugEntry } from '../lib/state-diff.js'
+import type { DashboardState, Issue, BugEntry, ConvoyEntry } from '../lib/state-diff.js'
 import { projectsContent } from '../views/project-card.js'
 import { agentsContent } from '../views/agent-row.js'
 import { beadTable } from '../views/bead-table.js'
 import { escalationsContent } from '../views/escalation-item.js'
 import { bugsContent } from '../views/bug-card.js'
+import { convoysContent } from '../views/convoy-row.js'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -46,8 +47,18 @@ function rowsToBugs(rows: any[]): BugEntry[] {
   }))
 }
 
+function rowsToConvoys(rows: any[]): ConvoyEntry[] {
+  return rows.map((r) => ({
+    id: String(r.id ?? ''),
+    title: String(r.title ?? ''),
+    status: String(r.status ?? ''),
+    tracked_count: Number(r.tracked_count ?? 0),
+    updated_at: String(r.updated_at ?? ''),
+  }))
+}
+
 async function fetchState(): Promise<DashboardState> {
-  const [projectRows, beadRows, escalationRows, agentRows, bugRows] = await Promise.all([
+  const [projectRows, beadRows, escalationRows, agentRows, bugRows, convoyRows] = await Promise.all([
     // Projects: HQ issues labelled with any 'project:*' tag
     pool
       .query<any[]>(
@@ -113,6 +124,21 @@ async function fetchState(): Promise<DashboardState> {
          LIMIT 20`,
       )
       .then(([r]) => r),
+
+    // Convoys: active convoy issues from HQ
+    pool
+      .query<any[]>(
+        `SELECT i.id, i.title, i.status, i.updated_at,
+                COUNT(d.issue_id) AS tracked_count
+         FROM hq.issues i
+         LEFT JOIN hq.dependencies d ON d.depends_on_id = i.id
+         WHERE i.issue_type = 'convoy'
+           AND i.status NOT IN ('closed', 'deferred')
+         GROUP BY i.id, i.title, i.status, i.updated_at
+         ORDER BY i.updated_at DESC
+         LIMIT 30`,
+      )
+      .then(([r]) => r),
   ])
 
   return {
@@ -121,6 +147,7 @@ async function fetchState(): Promise<DashboardState> {
     escalations: rowsToIssues(escalationRows),
     agents: rowsToIssues(agentRows),
     bugs: rowsToBugs(bugRows),
+    convoys: rowsToConvoys(convoyRows),
     timestamp: Date.now(),
   }
 }
@@ -144,6 +171,7 @@ async function poll(): Promise<void> {
     broadcastHtml('beads', beadTable(next.beads))
     broadcastHtml('escalations', escalationsContent(next.escalations))
     broadcastHtml('bugs', bugsContent(next.bugs))
+    broadcastHtml('convoys', convoysContent(next.convoys))
 
     currentState = next
   } catch (err) {

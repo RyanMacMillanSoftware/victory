@@ -7,6 +7,7 @@ import { agentsRoutes } from './routes/agents.js'
 import { beadsRoutes } from './routes/beads.js'
 import { escalationsRoutes } from './routes/escalations.js'
 import { bugsRoutes } from './routes/bugs.js'
+import { convoysRoutes } from './routes/convoys.js'
 import { startPoller } from './db/poller.js'
 
 const app = new Hono()
@@ -19,6 +20,7 @@ app.route('/routes/agents', agentsRoutes)
 app.route('/routes/beads', beadsRoutes)
 app.route('/routes/escalations', escalationsRoutes)
 app.route('/routes/bugs', bugsRoutes)
+app.route('/routes/convoys', convoysRoutes)
 
 app.get('/', (c) => {
   return c.html(
@@ -48,6 +50,11 @@ app.get('/', (c) => {
           <div class="panel" id="panel-bugs"
                hx-get="/routes/bugs" hx-trigger="load" hx-swap="innerHTML"
                sse-swap="bugs" hx-target="#panel-bugs">
+            <p class="empty">Loading\u2026</p>
+          </div>
+          <div class="panel" id="panel-convoys"
+               hx-get="/routes/convoys" hx-trigger="load" hx-swap="innerHTML"
+               sse-swap="convoys" hx-target="#panel-convoys">
             <p class="empty">Loading\u2026</p>
           </div>
         </section>

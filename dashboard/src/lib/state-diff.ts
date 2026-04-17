@@ -17,16 +17,25 @@ export interface BugEntry {
   status: string
 }
 
+export interface ConvoyEntry {
+  id: string
+  title: string
+  status: string
+  tracked_count: number
+  updated_at: string
+}
+
 export interface DashboardState {
   projects: Issue[]
   agents: Issue[]
   beads: Issue[]
   escalations: Issue[]
   bugs: BugEntry[]
+  convoys: ConvoyEntry[]
   timestamp: number
 }
 
-export type PanelKey = keyof Omit<DashboardState, 'timestamp' | 'bugs'>
+export type PanelKey = keyof Omit<DashboardState, 'timestamp' | 'bugs' | 'convoys'>
 
 export type ChangeEvent =
   | { op: 'added'; panel: PanelKey; item: Issue }
