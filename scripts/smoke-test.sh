@@ -388,16 +388,28 @@ else
             fail "response body does not look like the dashboard HTML"
         fi
 
-        # Verify SSE endpoint exists
-        SSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            --max-time 2 "http://localhost:${TEST_PORT}/api/live" \
-            -H "Accept: text/event-stream" 2>/dev/null || echo "ERR")
-        # SSE endpoint may return 200 or keep the connection open (200)
-        if [[ "$SSE_CODE" == "200" ]]; then
-            ok "SSE endpoint /api/live → 200"
-        else
-            # Non-fatal: SSE requires Dolt, which isn't running in this test
-            skip "SSE endpoint returned ${SSE_CODE} (Dolt not required here)"
-        fi
+        # Verify all dashboard panel routes return 200
+        for route in /routes/projects /routes/agents /routes/beads /routes/escalations /routes/bugs /routes/convoys; do
+            PANEL_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                --max-time 3 "http://localhost:${TEST_PORT}${route}" 2>/dev/null || echo "ERR")
+            if [[ "$PANEL_CODE" == "200" ]]; then
+                ok "HTTP GET ${route} → 200 OK"
+            else
+                fail "HTTP GET ${route} → ${PANEL_CODE} (expected 200)"
+            fi
+        done
+
+        # Verify SSE endpoints exist
+        for sse_path in /api/live /api/events; do
+            SSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                --max-time 2 "http://localhost:${TEST_PORT}${sse_path}" \
+                -H "Accept: text/event-stream" 2>/dev/null || echo "ERR")
+            if [[ "$SSE_CODE" == "200" ]]; then
+                ok "SSE endpoint ${sse_path} → 200"
+            else
+                # Non-fatal: SSE requires Dolt, which isn't running in this test
+                skip "SSE endpoint ${sse_path} returned ${SSE_CODE} (Dolt not required here)"
+            fi
+        done
     fi
 fi
