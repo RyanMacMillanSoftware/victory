@@ -13,6 +13,7 @@ description = "Victory rig pack — agents, formulas, and configuration for auto
 agents = "agents/"
 formulas = "formulas/"
 orders = "orders/"
+plugins = "plugins/"
 prompts = "prompts/"
 config = "config/"
 dashboard = "dashboard/"

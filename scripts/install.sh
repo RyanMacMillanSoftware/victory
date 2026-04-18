@@ -147,6 +147,39 @@ else
     fi
 fi
 
+# ── Step 5: Register rig-level plugins ──────────────────────────────────────
+step "Registering rig-level plugins"
+
+PLUGINS_SRC="${PACK_DIR}/plugins"
+PLUGINS_DEST="${GT_ROOT}/victory/plugins"
+
+if [[ ! -d "${PLUGINS_SRC}" ]]; then
+    ok "no plugins directory found — skipping"
+else
+    plugin_count=0
+    for plugin_dir in "${PLUGINS_SRC}"/*/; do
+        [[ -d "$plugin_dir" ]] || continue
+        plugin_name="$(basename "$plugin_dir")"
+        dest="${PLUGINS_DEST}/${plugin_name}"
+        if [[ $DRY_RUN -eq 1 ]]; then
+            dry "Would register plugin: ${plugin_name} → ${dest}/"
+        else
+            mkdir -p "${PLUGINS_DEST}"
+            if [[ -d "$dest" ]]; then
+                cp -r "${plugin_dir}/." "${dest}/"
+                ok "updated plugin: ${plugin_name}"
+            else
+                cp -r "${plugin_dir}" "${dest}"
+                ok "registered plugin: ${plugin_name}"
+            fi
+        fi
+        plugin_count=$((plugin_count + 1))
+    done
+    if [[ $plugin_count -eq 0 ]]; then
+        ok "plugins directory exists but is empty — nothing to register"
+    fi
+fi
+
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo
 hr

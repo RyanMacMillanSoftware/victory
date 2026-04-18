@@ -29,3 +29,13 @@ enabled = true
 strategy = "bisecting"       # bisecting | serial | parallel
 batch_size = 4
 gate_timeout = "10m"
+
+[city.orders]
+# Scheduled patrol and audit jobs for this rig.
+# Orders are defined in orders/*.toml and executed via rig-level plugins.
+# See plugins/ for the execution definitions and orders/ for full configuration.
+active = [
+  "overnight-build",         # cron: 0 * * * *     — hourly dispatch to available polecats
+  "pipeline-check",          # cron: */30 * * * *  — detect stuck polecats and stalled stages
+  "stale-project-detect",    # cron: 0 6 * * *     — daily 06:00 UTC: audit dormant projects
+]
