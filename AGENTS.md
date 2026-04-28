@@ -54,6 +54,7 @@ Real-time web dashboard built with Bun + Hono + HTMX + SSE.
 | `model_routing.py` / `model-routing.sh` | Model routing utilities |
 | `test-consultant-review.sh` | Test harness for consultant review flow |
 | `test-model-routing.sh` | Test harness for model routing |
+| `synthetic-monitor.sh` | Synthetic monitor: hits deployed api.molly.app every run; outputs Prometheus metrics; pages via Sentry on N consecutive failures. Run via `.github/workflows/synthetic-monitor.yml` every 5 min. |
 
 ### Configuration (`config/`)
 

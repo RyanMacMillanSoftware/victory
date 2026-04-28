@@ -1,0 +1,43 @@
+name: Synthetic Monitor
+
+# Hits deployed api.molly.app every 5 minutes and pages via Sentry on degradation.
+# Sister to e2e-chat-smoke.yml (per-PR); this is per-clock.
+#
+# Secrets required:
+#   SENTRY_DSN  — Sentry DSN for error event reporting
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+
+  workflow_dispatch: {}
+
+jobs:
+  synthetic-monitor:
+    name: Synthetic monitor — api.molly.app
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout victory
+        uses: actions/checkout@v4
+
+      - name: Run synthetic monitor
+        run: |
+          chmod +x scripts/synthetic-monitor.sh
+          bash scripts/synthetic-monitor.sh
+        env:
+          MOLLY_API_URL: https://api.molly.app
+          NODE_ENV: production
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          FAIL_THRESHOLD: "3"
+          STATE_FILE: /tmp/synthetic-monitor-state
+          PROM_FILE: /tmp/synthetic-monitor.prom
+
+      - name: Upload Prometheus metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-monitor-metrics
+          path: /tmp/synthetic-monitor.prom
+          if-no-files-found: ignore
