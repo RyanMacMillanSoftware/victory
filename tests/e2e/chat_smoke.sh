@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# E2E smoke test: chat send → sky aspects in SSE stream + Qdrant embedding OK + retrieval works
+# E2E smoke test: chat send → sky aspects + tool-use round-trip + Qdrant embedding OK
 #
 # Catches cross-service regressions spanning molly-api + molly-astro + Qdrant.
-# Historical failures caught: api/astro path mismatch (2026-04-29), Qdrant ULID rejection.
+# Historical failures caught: api/astro path mismatch (2026-04-29), Qdrant ULID rejection,
+# silent tool-calling regression (tick 21 — tools never invoked despite Phase 1 contract).
 #
 # Usage (local — stack already running):
 #   NO_COMPOSE=1 COMPOSE_FILE=/path/to/docker-compose.yml ./chat_smoke.sh
@@ -193,6 +194,81 @@ if [ "$AFTER_COUNT" -le "$BEFORE_COUNT" ]; then
   fail "Qdrant $QDRANT_COLLECTION count did not increase: before=$BEFORE_COUNT after=$AFTER_COUNT. Embedding pipeline may be broken (check Qdrant connectivity or ULID→UUID conversion)."
 fi
 pass "Qdrant point count increased: $BEFORE_COUNT → $AFTER_COUNT"
+
+# ── Tool-use round-trip: historical ephemeris query (Phase 1 milestone lock) ───
+# Added by vc-phc: assert tool_use happens for date-specific questions.
+# Mars was in Aquarius on July 4th, 1776. Catches silent regressions like tick 21
+# where tools were never invoked despite the Phase 1 contract being live.
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo " Tool-use round-trip: historical date ephemeris (Phase 1)"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
+info "Step 9: POST /v1/conversations (new conversation for tool-use test)"
+CONV2_RESP=$(curl -sf -X POST "$API_BASE/v1/conversations" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json") || fail "Create conversation (tool-use) failed"
+
+CONV2_ID=$(echo "$CONV2_RESP" | jq -r '.conversation.id // empty')
+[ -z "$CONV2_ID" ] && fail "No conversation.id in response: $CONV2_RESP"
+pass "Step 9: Created conversation (tool-use): $CONV2_ID"
+
+info "Step 10: Sending historical date query — 'Where was Mars on July 4th 1776?'"
+CALL_START_EPOCH=$(date +%s)
+SSE2_BODY=$(curl -sf -N \
+  -X POST "$API_BASE/v1/conversations/$CONV2_ID/messages" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --max-time 120 \
+  -d '{"content": "Where was Mars on July 4th 1776?"}') \
+  || fail "Mars 1776 message POST failed (curl exited non-zero)"
+CALL_ELAPSED=$(( $(date +%s) - CALL_START_EPOCH + 5 ))
+
+FULL_TEXT2=$(printf '%s\n' "$SSE2_BODY" \
+  | grep '^data:' \
+  | sed 's/^data: //' \
+  | jq -r '.token? // empty' 2>/dev/null \
+  | tr -d '\n')
+
+[ -z "$FULL_TEXT2" ] && fail "SSE stream for Mars 1776 produced no token text. Full body: $(printf '%s\n' "$SSE2_BODY" | head -20)"
+pass "Step 10: SSE stream received (${#FULL_TEXT2} chars)"
+
+# ── Step 11: Assert at least 1 tool_use event emitted ─────────────────────────
+info "Step 11: Asserting at least 1 tool_use event (SSE stream or API log)"
+
+# Check A: any SSE data line containing "tool_use" JSON string (content block)
+TOOL_USE_IN_SSE=$(printf '%s\n' "$SSE2_BODY" \
+  | grep '^data:' \
+  | grep -c '"tool_use"' 2>/dev/null || echo "0")
+
+# Check B: 'tool invocation' log line from molly-api during the call window
+TOOL_INV_IN_LOGS=0
+MOLLY_API_CTR=$(docker ps --filter "name=molly-api" --format "{{.Names}}" 2>/dev/null | head -1)
+if [ -n "$MOLLY_API_CTR" ]; then
+  TOOL_INV_IN_LOGS=$(docker logs "$MOLLY_API_CTR" --since "${CALL_ELAPSED}s" 2>&1 \
+    | grep -c "tool invocation" 2>/dev/null || echo "0")
+elif [ -n "$COMPOSE_FILE" ]; then
+  TOOL_INV_IN_LOGS=$(docker compose -f "$COMPOSE_FILE" logs molly-api --since "${CALL_ELAPSED}s" 2>&1 \
+    | grep -c "tool invocation" 2>/dev/null || echo "0")
+else
+  echo -e "${YELLOW}⚠${NC}  Cannot locate molly-api container for log check — relying on SSE check only"
+fi
+
+if [ "$TOOL_USE_IN_SSE" -gt 0 ]; then
+  pass "Step 11: tool_use event in SSE stream ($TOOL_USE_IN_SSE occurrence(s))"
+elif [ "$TOOL_INV_IN_LOGS" -gt 0 ]; then
+  pass "Step 11: 'tool invocation' in API logs ($TOOL_INV_IN_LOGS line(s))"
+else
+  fail "Step 11: No tool_use event in SSE stream and no 'tool invocation' in API logs. Tool calling is NOT happening for historical date queries — Phase 1 regression detected."
+fi
+
+# ── Step 12: Assert Aquarius in response ──────────────────────────────────────
+info "Step 12: Asserting response contains 'Aquarius' (Mars sign, July 4th 1776)"
+if ! echo "$FULL_TEXT2" | grep -qiE "Aquarius"; then
+  fail "Step 12: Response does not contain 'Aquarius'. Mars was in Aquarius on July 4th 1776. Preview: ${FULL_TEXT2:0:400}"
+fi
+pass "Step 12: 'Aquarius' confirmed in response ✓"
 
 # ── All checks passed ─────────────────────────────────────────────────────────
 echo ""

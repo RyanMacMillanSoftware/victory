@@ -4,7 +4,7 @@ name: E2E Chat Smoke
 # Also triggerable manually for ad-hoc runs.
 #
 # Spins up the full molly-api + molly-astro + Qdrant + Neo4j + Postgres stack,
-# runs tests/e2e/chat_smoke.sh (8 steps), tears down.
+# runs tests/e2e/chat_smoke.sh (12 steps), tears down.
 
 on:
   workflow_call:
