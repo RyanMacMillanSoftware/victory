@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
-# E2E smoke test: chat send → sky aspects + tool-use round-trip + Qdrant embedding OK
+# E2E smoke test: all 9 tool round-trips + sky aspects + Qdrant embedding pipeline
+#
+# Exercises all 9 molly tools across 6 prompts:
+#   Phase 1:  get_planet_position / get_ephemeris   (historical date query)
+#   Phase 2:  save_person_chart_to_memory, recall_person_chart_by_name
+#   Phase 3:  get_retrograde_calendar, get_aspect_calendar, get_lunar_calendar
+#   Sky:      get_transits (sky aspects prompt, Qdrant embedding check)
 #
 # Catches cross-service regressions spanning molly-api + molly-astro + Qdrant.
 # Historical failures caught: api/astro path mismatch (2026-04-29), Qdrant ULID rejection,
 # silent tool-calling regression (tick 21 — tools never invoked despite Phase 1 contract).
+# NOTE: get_retrograde_calendar test (Step 15) expected red until ms-23h merges.
 #
 # Usage (local — stack already running):
 #   NO_COMPOSE=1 COMPOSE_FILE=/path/to/docker-compose.yml ./chat_smoke.sh
@@ -263,12 +270,333 @@ else
   fail "Step 11: No tool_use event in SSE stream and no 'tool invocation' in API logs. Tool calling is NOT happening for historical date queries — Phase 1 regression detected."
 fi
 
+# ── Step 11b: Assert specific ephemeris tool (Phase 1 refinement) ─────────────
+info "Step 11b: Asserting get_planet_position OR get_ephemeris specifically invoked"
+
+EPH_IN_SSE=$(printf '%s\n' "$SSE2_BODY" \
+  | grep '^data:' \
+  | grep -cE '"get_planet_position"|"get_ephemeris"' 2>/dev/null || echo "0")
+
+if [ "$EPH_IN_SSE" -gt 0 ]; then
+  pass "Step 11b: get_planet_position/get_ephemeris invoked ($EPH_IN_SSE occurrence(s))"
+else
+  fail "Step 11b: Neither get_planet_position nor get_ephemeris in SSE for Mars 1776 date query — Phase 1 tool routing regression."
+fi
+
 # ── Step 12: Assert Aquarius in response ──────────────────────────────────────
 info "Step 12: Asserting response contains 'Aquarius' (Mars sign, July 4th 1776)"
 if ! echo "$FULL_TEXT2" | grep -qiE "Aquarius"; then
   fail "Step 12: Response does not contain 'Aquarius'. Mars was in Aquarius on July 4th 1776. Preview: ${FULL_TEXT2:0:400}"
 fi
 pass "Step 12: 'Aquarius' confirmed in response ✓"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase 3: get_retrograde_calendar, get_aspect_calendar, get_lunar_calendar
+# Phase 2: save_person_chart_to_memory, recall_person_chart_by_name
+# NOTE: Step 15 (get_retrograde_calendar) expected red until ms-23h merges.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Step 13–15: get_retrograde_calendar ───────────────────────────────────────
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo " Tool round-trip: get_retrograde_calendar (Phase 3)"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
+info "Step 13: POST /v1/conversations (retrograde test)"
+CONV3_RESP=$(curl -sf -X POST "$API_BASE/v1/conversations" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json") || fail "Create conversation (retrograde) failed"
+
+CONV3_ID=$(echo "$CONV3_RESP" | jq -r '.conversation.id // empty')
+[ -z "$CONV3_ID" ] && fail "No conversation.id in retrograde conversation response"
+pass "Step 13: Created conversation (retrograde): $CONV3_ID"
+
+info "Step 14: Sending retrograde query — 'When is the next Mercury retrograde?'"
+RETRO_START=$(date +%s)
+RETRO_BODY=$(curl -sf -N \
+  -X POST "$API_BASE/v1/conversations/$CONV3_ID/messages" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --max-time 120 \
+  -d '{"content": "When is the next Mercury retrograde?"}') \
+  || fail "Mercury retrograde message POST failed"
+RETRO_ELAPSED=$(( $(date +%s) - RETRO_START + 5 ))
+
+FULL_TEXT3=$(printf '%s\n' "$RETRO_BODY" \
+  | grep '^data:' \
+  | sed 's/^data: //' \
+  | jq -r '.token? // empty' 2>/dev/null \
+  | tr -d '\n')
+
+[ -z "$FULL_TEXT3" ] && fail "SSE stream for retrograde query produced no token text. Body: $(printf '%s\n' "$RETRO_BODY" | head -10)"
+pass "Step 14: SSE stream received (${#FULL_TEXT3} chars)"
+
+info "Step 15: Asserting get_retrograde_calendar invoked + response has dates"
+
+RETRO_TOOL_IN_SSE=$(printf '%s\n' "$RETRO_BODY" \
+  | grep '^data:' \
+  | grep -c '"get_retrograde_calendar"' 2>/dev/null || echo "0")
+
+if [ "$RETRO_TOOL_IN_SSE" -gt 0 ]; then
+  pass "Step 15a: get_retrograde_calendar in SSE ($RETRO_TOOL_IN_SSE occurrence(s))"
+else
+  RETRO_TOOL_LOG=0
+  if [ -n "$MOLLY_API_CTR" ]; then
+    RETRO_TOOL_LOG=$(docker logs "$MOLLY_API_CTR" --since "${RETRO_ELAPSED}s" 2>&1 \
+      | grep -c "get_retrograde_calendar" 2>/dev/null || echo "0")
+  elif [ -n "$COMPOSE_FILE" ]; then
+    RETRO_TOOL_LOG=$(docker compose -f "$COMPOSE_FILE" logs molly-api --since "${RETRO_ELAPSED}s" 2>&1 \
+      | grep -c "get_retrograde_calendar" 2>/dev/null || echo "0")
+  fi
+  if [ "$RETRO_TOOL_LOG" -gt 0 ]; then
+    pass "Step 15a: get_retrograde_calendar in logs ($RETRO_TOOL_LOG line(s))"
+  else
+    fail "Step 15a: get_retrograde_calendar NOT invoked for 'When is the next Mercury retrograde?' — Phase 3 regression."
+  fi
+fi
+
+if ! echo "$FULL_TEXT3" | grep -qiE '[0-9]{4}|January|February|March|April|May|June|July|August|September|October|November|December'; then
+  fail "Step 15b: Response contains no date for retrograde query. Preview: ${FULL_TEXT3:0:300}"
+fi
+pass "Step 15b: Date reference present in retrograde response"
+
+# ── Step 16–18: get_aspect_calendar ──────────────────────────────────────────
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo " Tool round-trip: get_aspect_calendar (Phase 3)"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
+info "Step 16: POST /v1/conversations (aspect test)"
+CONV4_RESP=$(curl -sf -X POST "$API_BASE/v1/conversations" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json") || fail "Create conversation (aspect) failed"
+
+CONV4_ID=$(echo "$CONV4_RESP" | jq -r '.conversation.id // empty')
+[ -z "$CONV4_ID" ] && fail "No conversation.id in aspect conversation response"
+pass "Step 16: Created conversation (aspect): $CONV4_ID"
+
+info "Step 17: Sending aspect query — 'When does Saturn next square my Sun?'"
+ASPECT_START=$(date +%s)
+ASPECT_BODY=$(curl -sf -N \
+  -X POST "$API_BASE/v1/conversations/$CONV4_ID/messages" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --max-time 120 \
+  -d '{"content": "When does Saturn next square my Sun?"}') \
+  || fail "Saturn aspect message POST failed"
+ASPECT_ELAPSED=$(( $(date +%s) - ASPECT_START + 5 ))
+
+FULL_TEXT4=$(printf '%s\n' "$ASPECT_BODY" \
+  | grep '^data:' \
+  | sed 's/^data: //' \
+  | jq -r '.token? // empty' 2>/dev/null \
+  | tr -d '\n')
+
+[ -z "$FULL_TEXT4" ] && fail "SSE stream for aspect query produced no token text. Body: $(printf '%s\n' "$ASPECT_BODY" | head -10)"
+pass "Step 17: SSE stream received (${#FULL_TEXT4} chars)"
+
+info "Step 18: Asserting get_aspect_calendar invoked + response has a date"
+
+ASPECT_TOOL_IN_SSE=$(printf '%s\n' "$ASPECT_BODY" \
+  | grep '^data:' \
+  | grep -c '"get_aspect_calendar"' 2>/dev/null || echo "0")
+
+if [ "$ASPECT_TOOL_IN_SSE" -gt 0 ]; then
+  pass "Step 18a: get_aspect_calendar in SSE ($ASPECT_TOOL_IN_SSE occurrence(s))"
+else
+  ASPECT_TOOL_LOG=0
+  if [ -n "$MOLLY_API_CTR" ]; then
+    ASPECT_TOOL_LOG=$(docker logs "$MOLLY_API_CTR" --since "${ASPECT_ELAPSED}s" 2>&1 \
+      | grep -c "get_aspect_calendar" 2>/dev/null || echo "0")
+  elif [ -n "$COMPOSE_FILE" ]; then
+    ASPECT_TOOL_LOG=$(docker compose -f "$COMPOSE_FILE" logs molly-api --since "${ASPECT_ELAPSED}s" 2>&1 \
+      | grep -c "get_aspect_calendar" 2>/dev/null || echo "0")
+  fi
+  if [ "$ASPECT_TOOL_LOG" -gt 0 ]; then
+    pass "Step 18a: get_aspect_calendar in logs ($ASPECT_TOOL_LOG line(s))"
+  else
+    fail "Step 18a: get_aspect_calendar NOT invoked for 'When does Saturn next square my Sun?' — Phase 3 regression."
+  fi
+fi
+
+if ! echo "$FULL_TEXT4" | grep -qiE '[0-9]{4}|January|February|March|April|May|June|July|August|September|October|November|December'; then
+  fail "Step 18b: Response contains no date for aspect query. Preview: ${FULL_TEXT4:0:300}"
+fi
+pass "Step 18b: Date reference present in aspect response"
+
+# ── Step 19–21: get_lunar_calendar ───────────────────────────────────────────
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo " Tool round-trip: get_lunar_calendar (Phase 3)"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
+info "Step 19: POST /v1/conversations (lunar test)"
+CONV5_RESP=$(curl -sf -X POST "$API_BASE/v1/conversations" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json") || fail "Create conversation (lunar) failed"
+
+CONV5_ID=$(echo "$CONV5_RESP" | jq -r '.conversation.id // empty')
+[ -z "$CONV5_ID" ] && fail "No conversation.id in lunar conversation response"
+pass "Step 19: Created conversation (lunar): $CONV5_ID"
+
+info "Step 20: Sending lunar query — 'When is the next full moon?'"
+LUNAR_START=$(date +%s)
+LUNAR_BODY=$(curl -sf -N \
+  -X POST "$API_BASE/v1/conversations/$CONV5_ID/messages" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --max-time 120 \
+  -d '{"content": "When is the next full moon?"}') \
+  || fail "Full moon message POST failed"
+LUNAR_ELAPSED=$(( $(date +%s) - LUNAR_START + 5 ))
+
+FULL_TEXT5=$(printf '%s\n' "$LUNAR_BODY" \
+  | grep '^data:' \
+  | sed 's/^data: //' \
+  | jq -r '.token? // empty' 2>/dev/null \
+  | tr -d '\n')
+
+[ -z "$FULL_TEXT5" ] && fail "SSE stream for lunar query produced no token text. Body: $(printf '%s\n' "$LUNAR_BODY" | head -10)"
+pass "Step 20: SSE stream received (${#FULL_TEXT5} chars)"
+
+info "Step 21: Asserting get_lunar_calendar invoked + response has a date"
+
+LUNAR_TOOL_IN_SSE=$(printf '%s\n' "$LUNAR_BODY" \
+  | grep '^data:' \
+  | grep -c '"get_lunar_calendar"' 2>/dev/null || echo "0")
+
+if [ "$LUNAR_TOOL_IN_SSE" -gt 0 ]; then
+  pass "Step 21a: get_lunar_calendar in SSE ($LUNAR_TOOL_IN_SSE occurrence(s))"
+else
+  LUNAR_TOOL_LOG=0
+  if [ -n "$MOLLY_API_CTR" ]; then
+    LUNAR_TOOL_LOG=$(docker logs "$MOLLY_API_CTR" --since "${LUNAR_ELAPSED}s" 2>&1 \
+      | grep -c "get_lunar_calendar" 2>/dev/null || echo "0")
+  elif [ -n "$COMPOSE_FILE" ]; then
+    LUNAR_TOOL_LOG=$(docker compose -f "$COMPOSE_FILE" logs molly-api --since "${LUNAR_ELAPSED}s" 2>&1 \
+      | grep -c "get_lunar_calendar" 2>/dev/null || echo "0")
+  fi
+  if [ "$LUNAR_TOOL_LOG" -gt 0 ]; then
+    pass "Step 21a: get_lunar_calendar in logs ($LUNAR_TOOL_LOG line(s))"
+  else
+    fail "Step 21a: get_lunar_calendar NOT invoked for 'When is the next full moon?' — Phase 3 regression."
+  fi
+fi
+
+if ! echo "$FULL_TEXT5" | grep -qiE '[0-9]{4}|January|February|March|April|May|June|July|August|September|October|November|December|full moon'; then
+  fail "Step 21b: Response contains no date for lunar query. Preview: ${FULL_TEXT5:0:300}"
+fi
+pass "Step 21b: Date reference present in lunar response"
+
+# ── Steps 22–25: save_person_chart_to_memory + recall_person_chart_by_name ────
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo " Tool round-trip: save + recall person chart (Phase 2)"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
+info "Step 22: POST /v1/conversations (memory tools test)"
+CONV6_RESP=$(curl -sf -X POST "$API_BASE/v1/conversations" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json") || fail "Create conversation (memory tools) failed"
+
+CONV6_ID=$(echo "$CONV6_RESP" | jq -r '.conversation.id // empty')
+[ -z "$CONV6_ID" ] && fail "No conversation.id in memory tools conversation response"
+pass "Step 22: Created conversation (memory tools): $CONV6_ID"
+
+info "Step 23: Sending save-person query — 'Save Sarah, Scorpio Sun born Nov 3 1992'"
+SAVE_START=$(date +%s)
+SAVE_BODY=$(curl -sf -N \
+  -X POST "$API_BASE/v1/conversations/$CONV6_ID/messages" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --max-time 120 \
+  -d '{"content": "Save Sarah, Scorpio Sun born Nov 3 1992"}') \
+  || fail "Save Sarah message POST failed"
+SAVE_ELAPSED=$(( $(date +%s) - SAVE_START + 5 ))
+
+FULL_TEXT6=$(printf '%s\n' "$SAVE_BODY" \
+  | grep '^data:' \
+  | sed 's/^data: //' \
+  | jq -r '.token? // empty' 2>/dev/null \
+  | tr -d '\n')
+
+[ -z "$FULL_TEXT6" ] && fail "SSE stream for save-person query produced no token text. Body: $(printf '%s\n' "$SAVE_BODY" | head -10)"
+pass "Step 23: SSE stream received (${#FULL_TEXT6} chars)"
+
+info "Step 24: Asserting save_person_chart_to_memory invoked"
+
+SAVE_TOOL_IN_SSE=$(printf '%s\n' "$SAVE_BODY" \
+  | grep '^data:' \
+  | grep -c '"save_person_chart_to_memory"' 2>/dev/null || echo "0")
+
+if [ "$SAVE_TOOL_IN_SSE" -gt 0 ]; then
+  pass "Step 24: save_person_chart_to_memory in SSE ($SAVE_TOOL_IN_SSE occurrence(s))"
+else
+  SAVE_TOOL_LOG=0
+  if [ -n "$MOLLY_API_CTR" ]; then
+    SAVE_TOOL_LOG=$(docker logs "$MOLLY_API_CTR" --since "${SAVE_ELAPSED}s" 2>&1 \
+      | grep -c "save_person_chart_to_memory" 2>/dev/null || echo "0")
+  elif [ -n "$COMPOSE_FILE" ]; then
+    SAVE_TOOL_LOG=$(docker compose -f "$COMPOSE_FILE" logs molly-api --since "${SAVE_ELAPSED}s" 2>&1 \
+      | grep -c "save_person_chart_to_memory" 2>/dev/null || echo "0")
+  fi
+  if [ "$SAVE_TOOL_LOG" -gt 0 ]; then
+    pass "Step 24: save_person_chart_to_memory in logs ($SAVE_TOOL_LOG line(s))"
+  else
+    fail "Step 24: save_person_chart_to_memory NOT invoked for 'Save Sarah, Scorpio Sun born Nov 3 1992' — Phase 2 regression."
+  fi
+fi
+
+info "Step 25: Sending recall query — 'Remind me about Sarah' (same conversation)"
+RECALL_START=$(date +%s)
+RECALL_BODY=$(curl -sf -N \
+  -X POST "$API_BASE/v1/conversations/$CONV6_ID/messages" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --max-time 120 \
+  -d '{"content": "Remind me about Sarah"}') \
+  || fail "Recall Sarah message POST failed"
+RECALL_ELAPSED=$(( $(date +%s) - RECALL_START + 5 ))
+
+FULL_TEXT7=$(printf '%s\n' "$RECALL_BODY" \
+  | grep '^data:' \
+  | sed 's/^data: //' \
+  | jq -r '.token? // empty' 2>/dev/null \
+  | tr -d '\n')
+
+[ -z "$FULL_TEXT7" ] && fail "SSE stream for recall query produced no token text. Body: $(printf '%s\n' "$RECALL_BODY" | head -10)"
+pass "Step 25a: SSE stream received (${#FULL_TEXT7} chars)"
+
+RECALL_TOOL_IN_SSE=$(printf '%s\n' "$RECALL_BODY" \
+  | grep '^data:' \
+  | grep -c '"recall_person_chart_by_name"' 2>/dev/null || echo "0")
+
+if [ "$RECALL_TOOL_IN_SSE" -gt 0 ]; then
+  pass "Step 25b: recall_person_chart_by_name in SSE ($RECALL_TOOL_IN_SSE occurrence(s))"
+else
+  RECALL_TOOL_LOG=0
+  if [ -n "$MOLLY_API_CTR" ]; then
+    RECALL_TOOL_LOG=$(docker logs "$MOLLY_API_CTR" --since "${RECALL_ELAPSED}s" 2>&1 \
+      | grep -c "recall_person_chart_by_name" 2>/dev/null || echo "0")
+  elif [ -n "$COMPOSE_FILE" ]; then
+    RECALL_TOOL_LOG=$(docker compose -f "$COMPOSE_FILE" logs molly-api --since "${RECALL_ELAPSED}s" 2>&1 \
+      | grep -c "recall_person_chart_by_name" 2>/dev/null || echo "0")
+  fi
+  if [ "$RECALL_TOOL_LOG" -gt 0 ]; then
+    pass "Step 25b: recall_person_chart_by_name in logs ($RECALL_TOOL_LOG line(s))"
+  else
+    fail "Step 25b: recall_person_chart_by_name NOT invoked for 'Remind me about Sarah' — Phase 2 memory regression."
+  fi
+fi
+
+if ! echo "$FULL_TEXT7" | grep -qiE 'Sarah|Scorpio|November'; then
+  fail "Step 25c: Response contains no Sarah/Scorpio/November reference after recall. Preview: ${FULL_TEXT7:0:300}"
+fi
+pass "Step 25c: Sarah/Scorpio reference present in recall response"
 
 # ── All checks passed ─────────────────────────────────────────────────────────
 echo ""
