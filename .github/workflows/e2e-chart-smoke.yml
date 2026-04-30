@@ -1,0 +1,98 @@
+name: E2E Chart Smoke
+
+# Reusable workflow — called from molly-api PRs that touch chart endpoints.
+# Also triggerable manually for ad-hoc runs.
+#
+# Spins up the full molly-api + molly-astro + Postgres stack,
+# runs tests/e2e/chart_smoke.sh (6 scenarios), tears down.
+#
+# Covers the mi-onz regression class:
+#   POST /v1/charts/compute + POST /v1/charts (Person/Event/Moment)
+#   auth validation, malformed-body handling (not 502).
+
+on:
+  workflow_call:
+    inputs:
+      molly_api_ref:
+        description: "molly-api branch/SHA to check out (default: main)"
+        type: string
+        default: main
+      molly_astro_ref:
+        description: "molly-astro branch/SHA to check out (default: main)"
+        type: string
+        default: main
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+  workflow_dispatch:
+    inputs:
+      molly_api_ref:
+        description: "molly-api branch/SHA"
+        type: string
+        default: main
+      molly_astro_ref:
+        description: "molly-astro branch/SHA"
+        type: string
+        default: main
+
+jobs:
+  e2e-chart-smoke:
+    name: E2E chart smoke (molly-api@${{ inputs.molly_api_ref }} + molly-astro@${{ inputs.molly_astro_ref }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout victory (test script)
+        uses: actions/checkout@v4
+        with:
+          repository: RyanMacMillanSoftware/victory
+          path: victory
+
+      - name: Checkout molly-api
+        uses: actions/checkout@v4
+        with:
+          repository: RyanMacMillanSoftware/molly-api
+          ref: ${{ inputs.molly_api_ref }}
+          path: molly-api
+
+      - name: Checkout molly-astro
+        uses: actions/checkout@v4
+        with:
+          repository: RyanMacMillanSoftware/molly-astro
+          ref: ${{ inputs.molly_astro_ref }}
+          path: molly-astro
+
+      - name: Write smoke .env for molly-api
+        run: |
+          cat > molly-api/.env <<'EOF'
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          JWT_SECRET=smoke-test-jwt-secret-32-chars-minimum-ok
+          APPLE_CLIENT_ID=com.molly.app.service
+          APPLE_TEAM_ID=SMOKETEST1
+          APPLE_KEY_ID=SMOKE12345
+          APPLE_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\nplaceholder\n-----END PRIVATE KEY-----
+          GOOGLE_CLIENT_ID=123456789.apps.googleusercontent.com
+          REVENUECAT_WEBHOOK_SECRET=whsec_smoke_test_placeholder
+          EOF
+
+      - name: Start full stack
+        run: |
+          MOLLY_ASTRO_DIR=${{ github.workspace }}/molly-astro \
+          docker compose -f molly-api/docker-compose.yml up -d --wait --build
+        timeout-minutes: 15
+
+      - name: Run E2E chart smoke test
+        run: |
+          chmod +x victory/tests/e2e/chart_smoke.sh
+          NO_COMPOSE=1 \
+          COMPOSE_FILE=${{ github.workspace }}/molly-api/docker-compose.yml \
+          victory/tests/e2e/chart_smoke.sh
+
+      - name: Collect stack logs on failure
+        if: failure()
+        run: docker compose -f molly-api/docker-compose.yml logs --tail=100
+
+      - name: Stop stack
+        if: always()
+        run: docker compose -f molly-api/docker-compose.yml down -v
