@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# E2E smoke test: all 9 tool round-trips + sky aspects + Qdrant embedding pipeline
+# E2E smoke test: all 13 tool round-trips + sky aspects + Qdrant embedding pipeline
 #
-# Exercises all 9 molly tools across 6 prompts:
+# Exercises all 13 molly tools across 11 prompts:
 #   Phase 1:  get_planet_position / get_ephemeris   (historical date query)
-#   Phase 2:  save_person_chart_to_memory, recall_person_chart_by_name
+#   Phase 2:  save_person_chart_to_memory, recall_person_chart_by_name,
+#             forget_person, compute_synastry, get_compatibility_summary
 #   Phase 3:  get_retrograde_calendar, get_aspect_calendar, get_lunar_calendar
 #   Sky:      get_transits (sky aspects prompt, Qdrant embedding check)
+#   Charts:   get_saved_charts, lookup_saved_chart_by_name
 #
 # Catches cross-service regressions spanning molly-api + molly-astro + Qdrant.
 # Historical failures caught: api/astro path mismatch (2026-04-29), Qdrant ULID rejection,
 # silent tool-calling regression (tick 21 — tools never invoked despite Phase 1 contract).
-# NOTE: get_retrograde_calendar test (Step 15) expected red until ms-23h merges.
 #
 # Usage (local — stack already running):
 #   NO_COMPOSE=1 COMPOSE_FILE=/path/to/docker-compose.yml ./chat_smoke.sh
@@ -597,6 +598,316 @@ if ! echo "$FULL_TEXT7" | grep -qiE 'Sarah|Scorpio|November'; then
   fail "Step 25c: Response contains no Sarah/Scorpio/November reference after recall. Preview: ${FULL_TEXT7:0:300}"
 fi
 pass "Step 25c: Sarah/Scorpio reference present in recall response"
+
+# ── Steps 26–28: get_saved_charts ────────────────────────────────────────────
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo " Tool round-trip: get_saved_charts (saved-charts surface)"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
+info "Step 26: POST /v1/conversations (get_saved_charts test)"
+CONV7_RESP=$(curl -sf -X POST "$API_BASE/v1/conversations" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json") || fail "Create conversation (get_saved_charts) failed"
+
+CONV7_ID=$(echo "$CONV7_RESP" | jq -r '.conversation.id // empty')
+[ -z "$CONV7_ID" ] && fail "No conversation.id in get_saved_charts conversation response"
+pass "Step 26: Created conversation (get_saved_charts): $CONV7_ID"
+
+info "Step 27: Sending query — 'Who do I have saved charts for?'"
+CHARTS_START=$(date +%s)
+CHARTS_BODY=$(curl -sf -N \
+  -X POST "$API_BASE/v1/conversations/$CONV7_ID/messages" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --max-time 120 \
+  -d '{"content": "Who do I have saved charts for? List all my saved people."}') \
+  || fail "get_saved_charts message POST failed"
+CHARTS_ELAPSED=$(( $(date +%s) - CHARTS_START + 5 ))
+
+FULL_TEXT8=$(printf '%s\n' "$CHARTS_BODY" \
+  | grep '^data:' \
+  | sed 's/^data: //' \
+  | jq -r '.token? // empty' 2>/dev/null \
+  | tr -d '\n')
+
+[ -z "$FULL_TEXT8" ] && fail "SSE stream for get_saved_charts query produced no token text. Body: $(printf '%s\n' "$CHARTS_BODY" | head -10)"
+pass "Step 27: SSE stream received (${#FULL_TEXT8} chars)"
+
+info "Step 28: Asserting get_saved_charts invoked"
+
+CHARTS_TOOL_IN_SSE=$(printf '%s\n' "$CHARTS_BODY" \
+  | grep '^data:' \
+  | grep -c '"get_saved_charts"' 2>/dev/null || echo "0")
+
+if [ "$CHARTS_TOOL_IN_SSE" -gt 0 ]; then
+  pass "Step 28: get_saved_charts in SSE ($CHARTS_TOOL_IN_SSE occurrence(s))"
+else
+  CHARTS_TOOL_LOG=0
+  if [ -n "$MOLLY_API_CTR" ]; then
+    CHARTS_TOOL_LOG=$(docker logs "$MOLLY_API_CTR" --since "${CHARTS_ELAPSED}s" 2>&1 \
+      | grep -c "get_saved_charts" 2>/dev/null || echo "0")
+  elif [ -n "$COMPOSE_FILE" ]; then
+    CHARTS_TOOL_LOG=$(docker compose -f "$COMPOSE_FILE" logs molly-api --since "${CHARTS_ELAPSED}s" 2>&1 \
+      | grep -c "get_saved_charts" 2>/dev/null || echo "0")
+  fi
+  if [ "$CHARTS_TOOL_LOG" -gt 0 ]; then
+    pass "Step 28: get_saved_charts in logs ($CHARTS_TOOL_LOG line(s))"
+  else
+    fail "Step 28: get_saved_charts NOT invoked for 'Who do I have saved charts for?' — saved-charts surface regression."
+  fi
+fi
+
+# ── Steps 29–31: lookup_saved_chart_by_name ───────────────────────────────────
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo " Tool round-trip: lookup_saved_chart_by_name (saved-charts surface)"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
+info "Step 29: POST /v1/conversations (lookup_saved_chart_by_name test)"
+CONV8_RESP=$(curl -sf -X POST "$API_BASE/v1/conversations" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json") || fail "Create conversation (lookup_saved_chart_by_name) failed"
+
+CONV8_ID=$(echo "$CONV8_RESP" | jq -r '.conversation.id // empty')
+[ -z "$CONV8_ID" ] && fail "No conversation.id in lookup_saved_chart_by_name conversation response"
+pass "Step 29: Created conversation (lookup_saved_chart_by_name): $CONV8_ID"
+
+info "Step 30: Sending query — 'Look up my saved chart for Sarah'"
+LOOKUP_START=$(date +%s)
+LOOKUP_BODY=$(curl -sf -N \
+  -X POST "$API_BASE/v1/conversations/$CONV8_ID/messages" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --max-time 120 \
+  -d '{"content": "Look up my saved chart for Sarah and tell me her details."}') \
+  || fail "lookup_saved_chart_by_name message POST failed"
+LOOKUP_ELAPSED=$(( $(date +%s) - LOOKUP_START + 5 ))
+
+FULL_TEXT9=$(printf '%s\n' "$LOOKUP_BODY" \
+  | grep '^data:' \
+  | sed 's/^data: //' \
+  | jq -r '.token? // empty' 2>/dev/null \
+  | tr -d '\n')
+
+[ -z "$FULL_TEXT9" ] && fail "SSE stream for lookup_saved_chart_by_name query produced no token text. Body: $(printf '%s\n' "$LOOKUP_BODY" | head -10)"
+pass "Step 30: SSE stream received (${#FULL_TEXT9} chars)"
+
+info "Step 31: Asserting lookup_saved_chart_by_name invoked + Sarah in response"
+
+LOOKUP_TOOL_IN_SSE=$(printf '%s\n' "$LOOKUP_BODY" \
+  | grep '^data:' \
+  | grep -c '"lookup_saved_chart_by_name"' 2>/dev/null || echo "0")
+
+if [ "$LOOKUP_TOOL_IN_SSE" -gt 0 ]; then
+  pass "Step 31a: lookup_saved_chart_by_name in SSE ($LOOKUP_TOOL_IN_SSE occurrence(s))"
+else
+  LOOKUP_TOOL_LOG=0
+  if [ -n "$MOLLY_API_CTR" ]; then
+    LOOKUP_TOOL_LOG=$(docker logs "$MOLLY_API_CTR" --since "${LOOKUP_ELAPSED}s" 2>&1 \
+      | grep -c "lookup_saved_chart_by_name" 2>/dev/null || echo "0")
+  elif [ -n "$COMPOSE_FILE" ]; then
+    LOOKUP_TOOL_LOG=$(docker compose -f "$COMPOSE_FILE" logs molly-api --since "${LOOKUP_ELAPSED}s" 2>&1 \
+      | grep -c "lookup_saved_chart_by_name" 2>/dev/null || echo "0")
+  fi
+  if [ "$LOOKUP_TOOL_LOG" -gt 0 ]; then
+    pass "Step 31a: lookup_saved_chart_by_name in logs ($LOOKUP_TOOL_LOG line(s))"
+  else
+    fail "Step 31a: lookup_saved_chart_by_name NOT invoked for 'Look up my saved chart for Sarah' — saved-charts regression."
+  fi
+fi
+
+if ! echo "$FULL_TEXT9" | grep -qiE 'Sarah|Scorpio|November|1992'; then
+  fail "Step 31b: Response contains no Sarah/Scorpio/November/1992 reference. Preview: ${FULL_TEXT9:0:300}"
+fi
+pass "Step 31b: Sarah/Scorpio reference present in lookup response"
+
+# ── Steps 32–34: get_compatibility_summary ────────────────────────────────────
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo " Tool round-trip: get_compatibility_summary (Phase 2)"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
+info "Step 32: POST /v1/conversations (get_compatibility_summary test)"
+CONV9_RESP=$(curl -sf -X POST "$API_BASE/v1/conversations" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json") || fail "Create conversation (get_compatibility_summary) failed"
+
+CONV9_ID=$(echo "$CONV9_RESP" | jq -r '.conversation.id // empty')
+[ -z "$CONV9_ID" ] && fail "No conversation.id in get_compatibility_summary conversation response"
+pass "Step 32: Created conversation (get_compatibility_summary): $CONV9_ID"
+
+info "Step 33: Sending query — 'What is my astrological compatibility with Sarah?'"
+COMPAT_START=$(date +%s)
+COMPAT_BODY=$(curl -sf -N \
+  -X POST "$API_BASE/v1/conversations/$CONV9_ID/messages" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --max-time 120 \
+  -d '{"content": "What is my astrological compatibility with Sarah? Give me a compatibility summary."}') \
+  || fail "get_compatibility_summary message POST failed"
+COMPAT_ELAPSED=$(( $(date +%s) - COMPAT_START + 5 ))
+
+FULL_TEXT10=$(printf '%s\n' "$COMPAT_BODY" \
+  | grep '^data:' \
+  | sed 's/^data: //' \
+  | jq -r '.token? // empty' 2>/dev/null \
+  | tr -d '\n')
+
+[ -z "$FULL_TEXT10" ] && fail "SSE stream for get_compatibility_summary query produced no token text. Body: $(printf '%s\n' "$COMPAT_BODY" | head -10)"
+pass "Step 33: SSE stream received (${#FULL_TEXT10} chars)"
+
+info "Step 34: Asserting get_compatibility_summary invoked"
+
+COMPAT_TOOL_IN_SSE=$(printf '%s\n' "$COMPAT_BODY" \
+  | grep '^data:' \
+  | grep -c '"get_compatibility_summary"' 2>/dev/null || echo "0")
+
+if [ "$COMPAT_TOOL_IN_SSE" -gt 0 ]; then
+  pass "Step 34: get_compatibility_summary in SSE ($COMPAT_TOOL_IN_SSE occurrence(s))"
+else
+  COMPAT_TOOL_LOG=0
+  if [ -n "$MOLLY_API_CTR" ]; then
+    COMPAT_TOOL_LOG=$(docker logs "$MOLLY_API_CTR" --since "${COMPAT_ELAPSED}s" 2>&1 \
+      | grep -c "get_compatibility_summary" 2>/dev/null || echo "0")
+  elif [ -n "$COMPOSE_FILE" ]; then
+    COMPAT_TOOL_LOG=$(docker compose -f "$COMPOSE_FILE" logs molly-api --since "${COMPAT_ELAPSED}s" 2>&1 \
+      | grep -c "get_compatibility_summary" 2>/dev/null || echo "0")
+  fi
+  if [ "$COMPAT_TOOL_LOG" -gt 0 ]; then
+    pass "Step 34: get_compatibility_summary in logs ($COMPAT_TOOL_LOG line(s))"
+  else
+    fail "Step 34: get_compatibility_summary NOT invoked for compatibility query with Sarah — Phase 2 regression."
+  fi
+fi
+
+# ── Steps 35–37: compute_synastry ─────────────────────────────────────────────
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo " Tool round-trip: compute_synastry (Phase 2)"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
+info "Step 35: POST /v1/conversations (compute_synastry test)"
+CONV10_RESP=$(curl -sf -X POST "$API_BASE/v1/conversations" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json") || fail "Create conversation (compute_synastry) failed"
+
+CONV10_ID=$(echo "$CONV10_RESP" | jq -r '.conversation.id // empty')
+[ -z "$CONV10_ID" ] && fail "No conversation.id in compute_synastry conversation response"
+pass "Step 35: Created conversation (compute_synastry): $CONV10_ID"
+
+info "Step 36: Sending synastry query with explicit natal degrees"
+SYNASTRY_START=$(date +%s)
+SYNASTRY_BODY=$(curl -sf -N \
+  -X POST "$API_BASE/v1/conversations/$CONV10_ID/messages" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --max-time 120 \
+  -d '{"content": "My natal planets are at these ecliptic longitudes: Sun 15\u00b0 Aries (absolute degree 15), Moon 22\u00b0 Cancer (absolute degree 112), Venus 10\u00b0 Taurus (absolute degree 40). Please compute the synastry chart between my natal positions and Sarah\u2019s saved chart."}') \
+  || fail "compute_synastry message POST failed"
+SYNASTRY_ELAPSED=$(( $(date +%s) - SYNASTRY_START + 5 ))
+
+FULL_TEXT11=$(printf '%s\n' "$SYNASTRY_BODY" \
+  | grep '^data:' \
+  | sed 's/^data: //' \
+  | jq -r '.token? // empty' 2>/dev/null \
+  | tr -d '\n')
+
+[ -z "$FULL_TEXT11" ] && fail "SSE stream for compute_synastry query produced no token text. Body: $(printf '%s\n' "$SYNASTRY_BODY" | head -10)"
+pass "Step 36: SSE stream received (${#FULL_TEXT11} chars)"
+
+info "Step 37: Asserting compute_synastry invoked"
+
+SYNASTRY_TOOL_IN_SSE=$(printf '%s\n' "$SYNASTRY_BODY" \
+  | grep '^data:' \
+  | grep -c '"compute_synastry"' 2>/dev/null || echo "0")
+
+if [ "$SYNASTRY_TOOL_IN_SSE" -gt 0 ]; then
+  pass "Step 37: compute_synastry in SSE ($SYNASTRY_TOOL_IN_SSE occurrence(s))"
+else
+  SYNASTRY_TOOL_LOG=0
+  if [ -n "$MOLLY_API_CTR" ]; then
+    SYNASTRY_TOOL_LOG=$(docker logs "$MOLLY_API_CTR" --since "${SYNASTRY_ELAPSED}s" 2>&1 \
+      | grep -c "compute_synastry" 2>/dev/null || echo "0")
+  elif [ -n "$COMPOSE_FILE" ]; then
+    SYNASTRY_TOOL_LOG=$(docker compose -f "$COMPOSE_FILE" logs molly-api --since "${SYNASTRY_ELAPSED}s" 2>&1 \
+      | grep -c "compute_synastry" 2>/dev/null || echo "0")
+  fi
+  if [ "$SYNASTRY_TOOL_LOG" -gt 0 ]; then
+    pass "Step 37: compute_synastry in logs ($SYNASTRY_TOOL_LOG line(s))"
+  else
+    fail "Step 37: compute_synastry NOT invoked for explicit synastry request with natal degrees — Phase 2 regression."
+  fi
+fi
+
+# ── Steps 38–40: forget_person ────────────────────────────────────────────────
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo " Tool round-trip: forget_person (Phase 2)"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
+info "Step 38: POST /v1/conversations (forget_person test)"
+CONV11_RESP=$(curl -sf -X POST "$API_BASE/v1/conversations" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json") || fail "Create conversation (forget_person) failed"
+
+CONV11_ID=$(echo "$CONV11_RESP" | jq -r '.conversation.id // empty')
+[ -z "$CONV11_ID" ] && fail "No conversation.id in forget_person conversation response"
+pass "Step 38: Created conversation (forget_person): $CONV11_ID"
+
+info "Step 39: Sending query — 'Please forget Sarah from your memory'"
+FORGET_START=$(date +%s)
+FORGET_BODY=$(curl -sf -N \
+  -X POST "$API_BASE/v1/conversations/$CONV11_ID/messages" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --max-time 120 \
+  -d '{"content": "Please forget Sarah — delete her chart from your memory."}') \
+  || fail "forget_person message POST failed"
+FORGET_ELAPSED=$(( $(date +%s) - FORGET_START + 5 ))
+
+FULL_TEXT12=$(printf '%s\n' "$FORGET_BODY" \
+  | grep '^data:' \
+  | sed 's/^data: //' \
+  | jq -r '.token? // empty' 2>/dev/null \
+  | tr -d '\n')
+
+[ -z "$FULL_TEXT12" ] && fail "SSE stream for forget_person query produced no token text. Body: $(printf '%s\n' "$FORGET_BODY" | head -10)"
+pass "Step 39: SSE stream received (${#FULL_TEXT12} chars)"
+
+info "Step 40: Asserting forget_person invoked + confirmation in response"
+
+FORGET_TOOL_IN_SSE=$(printf '%s\n' "$FORGET_BODY" \
+  | grep '^data:' \
+  | grep -c '"forget_person"' 2>/dev/null || echo "0")
+
+if [ "$FORGET_TOOL_IN_SSE" -gt 0 ]; then
+  pass "Step 40a: forget_person in SSE ($FORGET_TOOL_IN_SSE occurrence(s))"
+else
+  FORGET_TOOL_LOG=0
+  if [ -n "$MOLLY_API_CTR" ]; then
+    FORGET_TOOL_LOG=$(docker logs "$MOLLY_API_CTR" --since "${FORGET_ELAPSED}s" 2>&1 \
+      | grep -c "forget_person" 2>/dev/null || echo "0")
+  elif [ -n "$COMPOSE_FILE" ]; then
+    FORGET_TOOL_LOG=$(docker compose -f "$COMPOSE_FILE" logs molly-api --since "${FORGET_ELAPSED}s" 2>&1 \
+      | grep -c "forget_person" 2>/dev/null || echo "0")
+  fi
+  if [ "$FORGET_TOOL_LOG" -gt 0 ]; then
+    pass "Step 40a: forget_person in logs ($FORGET_TOOL_LOG line(s))"
+  else
+    fail "Step 40a: forget_person NOT invoked for 'Please forget Sarah' — Phase 2 regression."
+  fi
+fi
+
+if ! echo "$FULL_TEXT12" | grep -qiE 'Sarah|forgot|removed|deleted|forget|no longer'; then
+  fail "Step 40b: Response contains no forget/delete confirmation for Sarah. Preview: ${FULL_TEXT12:0:300}"
+fi
+pass "Step 40b: Forget confirmation present in response"
 
 # ── All checks passed ─────────────────────────────────────────────────────────
 echo ""
