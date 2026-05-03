@@ -4,7 +4,28 @@ name: E2E Chat Smoke
 # Also triggerable manually for ad-hoc runs.
 #
 # Spins up the full molly-api + molly-astro + Qdrant + Neo4j + Postgres stack,
-# runs tests/e2e/chat_smoke.sh (40 steps, 13 tools), tears down.
+# runs tests/e2e/chat_smoke.sh (46 steps, 13 tools + runaway detection), tears down.
+#
+# PATH-TRIGGER WIRING (add to the calling repo's CI, not here):
+#   molly-api  — trigger when src/services/claude.ts or src/routes/conversations.ts changes:
+#     on:
+#       pull_request:
+#         paths: ['src/services/claude.ts', 'src/routes/conversations.ts']
+#     jobs:
+#       e2e:
+#         uses: RyanMacMillanSoftware/victory/.github/workflows/e2e-chat-smoke.yml@main
+#         with: { molly_api_ref: '${{ github.sha }}' }
+#         secrets: { ANTHROPIC_API_KEY: '${{ secrets.ANTHROPIC_API_KEY }}' }
+#
+#   molly-astro — trigger when src/routes/transits.py changes:
+#     on:
+#       pull_request:
+#         paths: ['src/routes/transits.py']
+#     jobs:
+#       e2e:
+#         uses: RyanMacMillanSoftware/victory/.github/workflows/e2e-chat-smoke.yml@main
+#         with: { molly_astro_ref: '${{ github.sha }}' }
+#         secrets: { ANTHROPIC_API_KEY: '${{ secrets.ANTHROPIC_API_KEY }}' }
 
 on:
   workflow_call:

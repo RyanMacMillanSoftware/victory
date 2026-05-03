@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # E2E smoke test: all 13 tool round-trips + sky aspects + Qdrant embedding pipeline
+#                 + tool-loop runaway detection (ma-wt0 MAX_ITER guard)
 #
-# Exercises all 13 molly tools across 11 prompts:
+# Exercises all 13 molly tools across 12 prompts (46 steps):
 #   Phase 1:  get_planet_position / get_ephemeris   (historical date query)
 #   Phase 2:  save_person_chart_to_memory, recall_person_chart_by_name,
 #             forget_person, compute_synastry, get_compatibility_summary
 #   Phase 3:  get_retrograde_calendar, get_aspect_calendar, get_lunar_calendar
 #   Sky:      get_transits (sky aspects prompt, Qdrant embedding check)
 #   Charts:   get_saved_charts, lookup_saved_chart_by_name
+#   Runaway:  multi-tool liveness (30s) + MAX_ITER guard sentinel check (steps 41–46)
 #
 # Catches cross-service regressions spanning molly-api + molly-astro + Qdrant.
 # Historical failures caught: api/astro path mismatch (2026-04-29), Qdrant ULID rejection,
-# silent tool-calling regression (tick 21 — tools never invoked despite Phase 1 contract).
+# silent tool-calling regression (tick 21 — tools never invoked despite Phase 1 contract),
+# tool-loop SSE hang when live-streaming yield removed (2026-05-03, hq-klrr).
 #
 # Usage (local — stack already running):
 #   NO_COMPOSE=1 COMPOSE_FILE=/path/to/docker-compose.yml ./chat_smoke.sh
@@ -908,6 +911,89 @@ if ! echo "$FULL_TEXT12" | grep -qiE 'Sarah|forgot|removed|deleted|forget|no lon
   fail "Step 40b: Response contains no forget/delete confirmation for Sarah. Preview: ${FULL_TEXT12:0:300}"
 fi
 pass "Step 40b: Forget confirmation present in response"
+
+# ── Steps 41–46: Tool-loop runaway detection (ma-wt0 MAX_ITER guard) ──────────
+# Validates two properties added by ma-wt0 (2a43666):
+#   1. Live-streaming yield: tokens reach the client DURING the tool loop, not
+#      after. Enforced by the 30s wall-clock budget on --max-time.
+#   2. MAX_ITER guard correctness: guard threshold (MAX_TOOL_ITERATIONS=8) does
+#      not abort normal 3-tool plans. A misfire would produce the sentinel text
+#      "Reached my tool-call limit" in the response.
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo " Tool-loop runaway detection: multi-tool liveness + MAX_ITER guard (ma-wt0)"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+
+info "Step 41: POST /v1/conversations (runaway detection test)"
+CONV12_RESP=$(curl -sf -X POST "$API_BASE/v1/conversations" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json") || fail "Create conversation (runaway detection) failed"
+
+CONV12_ID=$(echo "$CONV12_RESP" | jq -r '.conversation.id // empty')
+[ -z "$CONV12_ID" ] && fail "No conversation.id in runaway detection conversation response"
+pass "Step 41: Created conversation (runaway detection): $CONV12_ID"
+
+info "Step 42: Sending multi-tool prompt — Venus transit + lunar phases + May aspects (30s budget)"
+RUNAWAY_START=$(date +%s)
+RUNAWAY_BODY=$(curl -sf -N \
+  -X POST "$API_BASE/v1/conversations/$CONV12_ID/messages" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --max-time 30 \
+  -d '{"content": "When will Venus next transit my natal Venus? Also list the upcoming lunar phases this month and any major planetary aspects happening in May."}') \
+  || fail "Step 42: Multi-tool prompt POST failed or timed out (>30s). Likely regression: ma-wt0 live-streaming yield removed — chunks accumulate post-loop instead of streaming to client."
+RUNAWAY_ELAPSED=$(( $(date +%s) - RUNAWAY_START + 2 ))
+
+FULL_TEXT13=$(printf '%s\n' "$RUNAWAY_BODY" \
+  | grep '^data:' \
+  | sed 's/^data: //' \
+  | jq -r '.token? // empty' 2>/dev/null \
+  | tr -d '\n')
+
+info "Step 43: Asserting multi-tool SSE stream non-empty within 30s"
+[ -z "$FULL_TEXT13" ] && fail "Step 43: Multi-tool SSE stream produced no token text within 30s. Live-streaming regression or tool loop hang. Body preview: $(printf '%s\n' "$RUNAWAY_BODY" | head -5)"
+pass "Step 43: Multi-tool SSE stream received within 30s (${#FULL_TEXT13} chars)"
+
+info "Step 44: Asserting ≥2 distinct calendar/transit tools invoked"
+RUNAWAY_TOOLS_IN_SSE=$(printf '%s\n' "$RUNAWAY_BODY" \
+  | grep '^data:' \
+  | grep -oE '"(get_transits|get_aspect_calendar|get_lunar_calendar|get_retrograde_calendar|get_planet_position|get_ephemeris)"' 2>/dev/null \
+  | sort -u | wc -l | tr -d ' ')
+
+RUNAWAY_TOOLS_IN_LOGS=0
+MOLLY_CTR=$(docker ps --filter "name=molly-api" --format "{{.Names}}" 2>/dev/null | head -1)
+if [ -n "$MOLLY_CTR" ]; then
+  RUNAWAY_TOOLS_IN_LOGS=$(docker logs "$MOLLY_CTR" --since "${RUNAWAY_ELAPSED}s" 2>&1 \
+    | grep -cE '"(get_transits|get_aspect_calendar|get_lunar_calendar)"' 2>/dev/null || echo "0")
+elif [ -n "$COMPOSE_FILE" ]; then
+  RUNAWAY_TOOLS_IN_LOGS=$(docker compose -f "$COMPOSE_FILE" logs molly-api --since "${RUNAWAY_ELAPSED}s" 2>&1 \
+    | grep -cE '"(get_transits|get_aspect_calendar|get_lunar_calendar)"' 2>/dev/null || echo "0")
+fi
+
+if [ "$RUNAWAY_TOOLS_IN_SSE" -ge 2 ]; then
+  pass "Step 44: ≥2 distinct calendar/transit tools in SSE ($RUNAWAY_TOOLS_IN_SSE distinct name(s))"
+elif [ "$RUNAWAY_TOOLS_IN_LOGS" -ge 2 ]; then
+  pass "Step 44: ≥2 calendar/transit tool hits in logs ($RUNAWAY_TOOLS_IN_LOGS)"
+else
+  fail "Step 44: Multi-tool prompt triggered <2 distinct tool invocations (SSE: $RUNAWAY_TOOLS_IN_SSE distinct, logs: $RUNAWAY_TOOLS_IN_LOGS). Expected get_transits + get_aspect_calendar or get_lunar_calendar to both fire."
+fi
+
+info "Step 45: Asserting astro content in multi-tool response"
+if ! echo "$FULL_TEXT13" | grep -qiE 'Venus|Moon|lunar|aspect|transit|May|phase|[0-9]{4}'; then
+  fail "Step 45: Multi-tool response contains no astro content. Preview: ${FULL_TEXT13:0:400}"
+fi
+pass "Step 45: Astro content confirmed in multi-tool response"
+
+# Step 46: MAX_ITER abort assertion — the fallback sentinel text must NOT appear
+# for a normal ~3-tool plan. If it does, MAX_TOOL_ITERATIONS is too low and is
+# aborting legitimate multi-tool queries.
+# Sentinel: "\n[Reached my tool-call limit — try rephrasing your question.]\n"
+info "Step 46: Asserting MAX_ITER guard did NOT fire on normal multi-tool query"
+if echo "$FULL_TEXT13" | grep -qiF "Reached my tool-call limit"; then
+  fail "Step 46: MAX_ITER guard fired on a normal multi-tool query — guard threshold too low. Check MAX_TOOL_ITERATIONS in molly_api/src/services/claude.ts (expected ≥ 8, guard should not trip on ~3-tool plans)."
+fi
+pass "Step 46: MAX_ITER guard correctly absent from normal multi-tool response ✓"
 
 # ── All checks passed ─────────────────────────────────────────────────────────
 echo ""
